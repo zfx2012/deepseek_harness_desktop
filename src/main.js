@@ -355,8 +355,8 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   isQuitting = true
   if (server) server.dispose()
-  // A downloaded update installs on quit (AUDIT-v2 P2-3): hand over to
-  // electron-updater once, guarded so quitAndInstall's own re-quit is a no-op.
+  // A downloaded update installs on quit: hand over to electron-updater
+  // once, guarded so quitAndInstall's own re-quit is a no-op.
   if (updateReady && !installingUpdate && autoUpdater) {
     installingUpdate = true
     autoUpdater.quitAndInstall()
@@ -395,7 +395,7 @@ function registerIpc() {
       builtAt: manifest ? manifest.builtAt : null,
       packageCount: manifest ? manifest.packageCount : null,
       // Note: the manifest's harnessCheckout is a build-machine path and is
-      // intentionally NOT exposed here (AUDIT-v2 P3-10).
+      // intentionally NOT exposed here.
     }
   })
   // Kernel (harness) update check against the official repository. The check

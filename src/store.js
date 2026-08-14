@@ -76,4 +76,4 @@ class SettingsStore {
   }
 }
 
-module.exports = { SettingsStore, DEFAULTS }
+module.exports = { SettingsStore }

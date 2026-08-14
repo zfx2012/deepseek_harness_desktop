@@ -2,7 +2,7 @@
 
 /**
  * ServerManager state-machine tests: readiness detection, stale-log guard,
- * restart race (AUDIT-v2 P1-1), crash auto-restart, stop, spawn errors,
+ * restart race, crash auto-restart, stop, spawn errors,
  * pre-heal, log rotation, and the Node-version launch gate — with an injected
  * fake child process and spawnSync.
  */
@@ -143,7 +143,7 @@ test('stale readiness lines from previous boots never trigger ready', async () =
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
-test('restart: the old child late exit must not corrupt the new boot (AUDIT-v2 P1-1)', async () => {
+test('restart: the old child late exit must not corrupt the new boot', async () => {
   const { manager, spawned, tmp } = makeManager()
   const nodeSpawns = () => spawned.filter((s) => s.args[0] === 'node').length
 
@@ -228,7 +228,7 @@ test('harness source is tracked in state', () => {
 
 // ── pre-heal / log rotation ──────────────────────────────────────────────────
 
-test('preHealProfiles replaces a real directory with a junction (AUDIT-v2 P2-4)', () => {
+test('preHealProfiles replaces a real directory with a junction', () => {
   const { manager, harness, tmp } = makeManager()
   const home = path.join(tmp, 'dsh-home')
   const dest = path.join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-web-app')

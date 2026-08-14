@@ -13,11 +13,7 @@
  */
 
 import { createServer } from 'node:http'
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
 const portIdx = args.indexOf('--port')
 const PORT = portIdx >= 0 ? Number(args[portIdx + 1]) : 18765

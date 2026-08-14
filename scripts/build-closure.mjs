@@ -5,7 +5,7 @@
  * Build a self-contained production closure of the dsh CLI from a working
  * harness checkout (the checkout must boot `dsh web` itself).
  *
- * pnpm's own `deploy` is broken on this machine's pnpm versions (legacy deploy
+ * pnpm's own `deploy` is unreliable for this workspace layout (legacy deploy
  * emits an unusable tree; the injected path hits a lockfileDir regression), so
  * this script materializes the closure manually, replicating pnpm's virtual
  * store layout:
@@ -66,10 +66,6 @@ function platformCompatible(manifest) {
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, 'utf8'))
-}
-
-function isDir(p) {
-  try { return statSync(p).isDirectory() } catch { return false }
 }
 
 /** Copy a package dir into the store, skipping junk. */

@@ -77,12 +77,6 @@ function isHarness(root) {
   }
 }
 
-/** Resolve the effective harness root: explicit setting > bundled/env > detected. */
-function resolveHarnessRoot(explicit) {
-  const resolved = resolveHarnessRootWithSource(explicit)
-  return resolved ? resolved.root : null
-}
-
 /**
  * Resolve the effective harness root plus its provenance.
  * @returns {{ root: string, source: 'setting'|'bundled'|'env'|'detected' } | null}
@@ -321,10 +315,10 @@ class ServerManager {
     })
 
     child.on('exit', (code, signal) => {
-      // Identity guard (restart race, AUDIT-v2 P1-1): after start() replaces
-      // the child, the old child's late exit must be ignored entirely —
-      // otherwise it clears the new child reference, resets the URL, and
-      // forces the state machine into error, permanently blocking ready.
+      // Identity guard: after start() replaces the child, a stale child's
+      // late exit must be ignored entirely — otherwise it clears the new
+      // child reference, resets the URL, and forces the state machine into
+      // error, permanently blocking ready.
       if (this.child !== child) return
       this.drainLog() // catch any final diagnostics the poller hasn't read yet
       this.log(`[server] exited code=${code} signal=${signal}`)
@@ -511,8 +505,8 @@ class ServerManager {
     }
     if (!child || child.pid === undefined) return
     // Synchronous process-tree kill: by the time stopChild returns, the tree
-    // is gone — restart (P1-1 window) and app-quit cleanup (AUDIT-v2 P2-1)
-    // can no longer race with a half-dead child.
+    // is gone — restart and app-quit cleanup can no longer race with a
+    // half-dead child.
     try {
       this.spawnSyncImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
         windowsHide: true,
@@ -551,7 +545,6 @@ function resetNodeLaunchCache() {
 
 module.exports = {
   ServerManager,
-  resolveHarnessRoot,
   resolveHarnessRootWithSource,
   detectHarnessRoots,
   isHarness,

@@ -108,7 +108,7 @@ Invoke-Step 'no-node smoke (ELECTRON_RUN_AS_NODE)' {
 }
 
 # 7. update-feed smoke — the packaged app must discover version 0.2.0 from a
-# local generic feed (electron-updater end-to-end discovery, AUDIT-v2 P2-2)
+# local generic feed (electron-updater end-to-end discovery)
 $updateHome = Join-Path $root '.verify-update-home'
 $feedPort = 18765
 Invoke-Step 'update-feed smoke' {

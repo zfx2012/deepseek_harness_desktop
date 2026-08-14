@@ -3,13 +3,10 @@
 /**
  * dsh-desktop — harness (kernel) update check.
  *
- * The check source is intentionally hardcoded here and never shown in the UI.
- * The official repository publishes releases through npm
- * (`@deepseek-ai/dsh`), so the latest PUBLISHED version is read from the npm
- * registry's dist-tags. The repository itself has no GitHub releases or tags
- * and raw.githubusercontent.com is unreliable from some networks, so the
- * registry is the canonical source. The repo link surfaced to the user still
- * points at the official GitHub repository.
+ * The check source is intentionally hardcoded here and never shown in the UI:
+ * the official release channel is npm (`@deepseek-ai/dsh`), so the latest
+ * published version is read from the registry's dist-tags. The repo link
+ * surfaced to the user points at the official GitHub repository.
  */
 
 const OFFICIAL_REPO_URL = 'https://github.com/deepseek-ai/deepseek-harness'
