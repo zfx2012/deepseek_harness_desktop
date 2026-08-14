@@ -106,7 +106,6 @@ window.dsh.getBundleInfo().then((info) => {
       ? `内置 Harness：${info.harnessVersion}（${info.packageCount ?? '?'} 包，构建于 ${(info.builtAt || '').slice(0, 19).replace('T', ' ')}）`
       : '内置 Harness：未捆绑（将使用外部 checkout 或检测路径）',
   ]
-  if (info.harnessCheckout) lines.push(`来源 checkout：${info.harnessCheckout}`)
   document.getElementById('about').textContent = lines.join('\n')
 })
 

@@ -74,11 +74,6 @@ class SettingsStore {
     if (changed) this.save()
     return changed
   }
-
-  reset() {
-    this.data = { ...DEFAULTS }
-    this.save()
-  }
 }
 
 module.exports = { SettingsStore, DEFAULTS }

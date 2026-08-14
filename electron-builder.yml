@@ -1,9 +1,8 @@
 appId: ai.deepseek.harness.desktop
 productName: DeepSeek Harness Desktop
-copyright: Copyright © 2025 DeepSeek
+copyright: Copyright © 2026 DeepSeek Harness Desktop contributors
 directories:
   output: release
-  buildResources: build
 files:
   - src/**
   - assets/icon.png

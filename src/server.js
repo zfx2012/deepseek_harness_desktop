@@ -67,11 +67,10 @@ function isHarness(root) {
   try {
     if (resolveBin(root) === null) return false
     // pnpm layouts vary: root node_modules (deploy), or per-package node_modules
-    // (workspace checkout). Any node_modules with the web-app bundle counts.
+    // (workspace checkout). The web-app bundle must be resolvable either way.
     return (
       fs.existsSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app')) ||
-      fs.existsSync(path.join(root, 'apps', 'cli', 'node_modules', '@deepseek-ai', 'dsh-web-app')) ||
-      fs.existsSync(path.join(root, 'apps', 'cli', 'node_modules'))
+      fs.existsSync(path.join(root, 'apps', 'cli', 'node_modules', '@deepseek-ai', 'dsh-web-app'))
     )
   } catch {
     return false
@@ -168,12 +167,13 @@ class ServerManager {
    * @param {(line: string) => void} deps.onLog
    * @param {string} deps.logFile - path of the server log file (appended).
    */
-  constructor({ settings, onState, onLog, logFile, spawnImpl }) {
+  constructor({ settings, onState, onLog, logFile, spawnImpl, spawnSyncImpl }) {
     this.settings = settings
     this.onState = onState
     this.onLog = onLog
     this.logFile = logFile
     this.spawnImpl = spawnImpl ?? spawn
+    this.spawnSyncImpl = spawnSyncImpl ?? spawnSync
     this.child = null
     this.url = null
     this.phase = 'idle' // idle | starting | ready | error | stopping
@@ -310,6 +310,9 @@ class ServerManager {
     this.filePos = this.currentLogSize()
 
     child.on('error', (error) => {
+      // Identity guard: this child may already have been replaced by a restart;
+      // a stale child's events must never touch the current state machine.
+      if (this.child !== child) return
       this.log(`[server] spawn error: ${error.message}`)
       if (!this.stopping) {
         this.error = `启动失败: ${error.message}`
@@ -318,6 +321,11 @@ class ServerManager {
     })
 
     child.on('exit', (code, signal) => {
+      // Identity guard (restart race, AUDIT-v2 P1-1): after start() replaces
+      // the child, the old child's late exit must be ignored entirely —
+      // otherwise it clears the new child reference, resets the URL, and
+      // forces the state machine into error, permanently blocking ready.
+      if (this.child !== child) return
       this.drainLog() // catch any final diagnostics the poller hasn't read yet
       this.log(`[server] exited code=${code} signal=${signal}`)
       this.child = null
@@ -380,6 +388,21 @@ class ServerManager {
       for (const entry of fs.readdirSync(topAi)) {
         const target = path.join(topAi, entry)
         const dest = path.join(profilesNm, '@deepseek-ai', entry)
+        try {
+          const st = fs.lstatSync(dest)
+          if (st.isSymbolicLink()) continue // already linked
+          // A real directory would make dsh's own heal step throw; move it
+          // aside so the junction can take its place.
+          if (st.isDirectory()) {
+            try {
+              fs.renameSync(dest, `${dest}.dsh-bak`)
+            } catch {
+              continue // in use or not movable; leave it alone
+            }
+          }
+        } catch {
+          /* dest missing — proceed to create */
+        }
         try {
           fs.symlinkSync(target, dest, 'junction')
         } catch {
@@ -487,24 +510,23 @@ class ServerManager {
       this.crashTimer = null
     }
     if (!child || child.pid === undefined) return
+    // Synchronous process-tree kill: by the time stopChild returns, the tree
+    // is gone — restart (P1-1 window) and app-quit cleanup (AUDIT-v2 P2-1)
+    // can no longer race with a half-dead child.
     try {
-      const killer = this.spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+      this.spawnSyncImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
         windowsHide: true,
         stdio: 'ignore',
+        timeout: 10000,
       })
-      killer.on('error', () => {})
     } catch {
       /* best effort */
     }
-    setTimeout(() => {
-      if (!child.killed) {
-        try {
-          child.kill()
-        } catch {
-          /* already gone */
-        }
-      }
-    }, 500).unref()
+    try {
+      if (!child.killed) child.kill()
+    } catch {
+      /* already gone */
+    }
   }
 
   /** User-requested stop: no auto-restart, terminal 'stopped' state. */
@@ -522,6 +544,11 @@ class ServerManager {
   }
 }
 
+/** Test hook: reset the cached node-launch decision. */
+function resetNodeLaunchCache() {
+  cachedLaunch = null
+}
+
 module.exports = {
   ServerManager,
   resolveHarnessRoot,
@@ -530,4 +557,6 @@ module.exports = {
   isHarness,
   parseNodeVersion,
   satisfiesHarnessEngines,
+  resolveNodeLaunch,
+  resetNodeLaunchCache,
 }

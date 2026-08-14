@@ -213,9 +213,10 @@ console.log(`Closure: ${nodes.length} packages`)
 
 // 1b. Hoisting decision. Packages whose name resolves to exactly one version
 // live ONCE at the top level (visible to every parent via upward resolution,
-// no per-edge copies). Conflicted names pick the most-referenced version for
-// the top level; the other versions live in the virtual store and are linked
-// only from the parents that need them.
+// no per-edge copies). Conflicted names hoist the first-encountered version
+// (node real-dirs are deduped, so every version is represented once); the
+// other versions live in the virtual store and are linked only from the
+// parents that need them.
 const storeRoot = path.join(OUT, 'node_modules', '.pnpm')
 const topNm = path.join(OUT, 'node_modules')
 

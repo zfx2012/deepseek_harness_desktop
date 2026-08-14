@@ -2,10 +2,10 @@
 'use strict'
 
 /**
- * Prepare the dist build: ensure harness-deploy/ exists for extraResources.
- * If a harness checkout is reachable we bundle it (full standalone app);
- * otherwise we ship an empty dir so the packaged app still runs against a
- * user-configured harness path (auto-detect + settings page).
+ * Prepare the dist build: ensure harness-deploy/ exists for the afterPack
+ * bundle copy. If a harness checkout is reachable we bundle it (full
+ * standalone app); otherwise the packaged app runs against a user-configured
+ * harness path (auto-detect + settings page).
  *
  * Usage: node scripts/prepare-dist.mjs [--skip-bundle]
  */
@@ -46,7 +46,6 @@ function validateBundle() {
   const probes = [
     'node_modules/@deepseek-ai/dsh-web-app',
     'node_modules/commander',
-    'node_modules/.pnpm/@deepseek-ai+dsh-web-app@0.1.0-rc.5_workspace/node_modules/@deepseek-ai/dsh-web-frontend',
   ]
   for (const rel of probes) {
     try {

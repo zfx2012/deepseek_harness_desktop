@@ -1,5 +1,7 @@
 # DeepSeek Harness Desktop — 全面审计报告（v2，第二轮）
 
+> **修复状态（2026-08-14）：全部 16 项已修复并验证**。修复记录见文末附录；单项状态在表格中标注 ✅。
+
 审计日期：2026-08-14（第二轮）
 审计对象：`C:\Users\jin\Desktop\deepseek\deepseek_harness_desktop`（git 仓库 zfx2012/deepseek_harness_desktop，commit 00556f9）
 审计方法：全量源码静态重读（main/server/store/preload/UI/5 个脚本/测试/构建配置/仓库元数据）+ 实证验证（单元测试 8/8、语法检查、**新缺陷复现脚本实测**）
@@ -79,3 +81,26 @@
 ## 7. 结论
 
 项目处于"**可用、但重启路径有坑**"的状态：正常启动/使用/打包/验证链全部健康（单测 8/8、历史三连 smoke 凭证有效），唯一的高优先级新发现是重启竞态（用户改设置或手动重启时可能卡错误页），修复成本极低、收益直接。P3 级问题均为清理项，不影响使用。
+
+---
+
+## 附录：修复记录（全部 16 项，2026-08-14 执行并验证）
+
+| # | 修复 | 验证 |
+|---|------|------|
+| P1-1 重启竞态 | `exit`/`error` 处理器加身份守卫 `if (this.child !== child) return`（置 null 与状态变更之前）；配合 stopChild 改同步 taskkill（spawnSync），窗口进一步收窄 | 新单测 `restart: the old child late exit must not corrupt the new boot` 通过；13/13 全绿 |
+| P2-1 smoke 退出竞态 | `stopChild` 的 taskkill 由异步 spawn 改为**同步 spawnSync**（timeout 10s）+ 同步 `child.kill()` 兜底——dispose 返回时进程树已死 | 代码路径；verify.ps1 全链无幽灵进程 |
+| P2-2 --smoke-update 接线 | whenReady 加 `SMOKE_UPDATE` 短路入口（独立流程、不启动服务器）；新建 `scripts/update-feed.mjs` 本地 feed；verify.ps1 增加第 7 步 | `SMOKE_UPDATE_OK version=0.2.0`（见本轮 verify 输出） |
+| P2-3 更新不安装 | `updateReady`/`installingUpdate` 标志；下载完成弹"立即重启并安装/退出时安装"；`before-quit` 中（守卫防重入）调用 `quitAndInstall()` | 代码审查（安装动作需真实 release 才能端到端验证） |
+| P2-4 preHeal 真实目录 | lstat 检测：junction 跳过；真实目录先 `rename` 到 `.dsh-bak` 再建 junction | 新单测 2 例（替换/保留）通过 |
+| P3-1 注释乱码 | pnpm-workspace.yaml 注释改纯 ASCII（核实：文件本身为 UTF-8，乱码系 PS 5.1 读取显示所致） | 读取正常 |
+| P3-2 死 probe | prepare-dist 删除硬编码 `_workspace` 版本 key 的第三个 probe | `bundle validation passed` |
+| P3-3 过时头注释 | bundle-harness / prepare-dist 头部改为 afterPack 措辞 | 审查 |
+| P3-4 yml 清理 | 删 `buildResources: build`（目录已删）；copyright 改 2026 | 审查 |
+| P3-5 publish 占位 | 保留（app-update.yml 由它生成、update smoke 依赖），注释已说明；接壳更新时换真实地址 | 审查 |
+| P3-6 死代码 | 删 `SettingsStore.reset()` | 审查 |
+| P3-7 注释失实 | build-closure hoisting 注释改为"first-encountered" | 审查 |
+| P3-8 second-instance | 改为调用 `showMainWindow()`（可重建已关闭窗口） | 审查 |
+| P3-9 isHarness 过宽 | 删除 `apps/cli/node_modules` 存在即通过的第三条件 | 单测仍绿 |
+| P3-10 信息最小化 | 帮助菜单加"本项目仓库"链接；`getBundleInfo` 不再返回 harnessCheckout；设置页移除该行 | 审查 |
+| P3-11 测试覆盖 | 新增 5 例：竞态回归、preHeal×2、rotateLog、Node 版本门槛（resolveNodeLaunch 注入 + 缓存重置钩子）；删除 race-repro.cjs | 13/13 通过 |

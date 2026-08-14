@@ -1,0 +1,5 @@
+
+Checking for update
+Checking for update (already in progress)
+Found version 0.2.0 (url: DeepSeek Harness Desktop-0.2.0-x64.exe)
+SMOKE_UPDATE_OK version=0.2.0

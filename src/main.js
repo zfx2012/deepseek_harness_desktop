@@ -23,6 +23,8 @@ const { ServerManager, detectHarnessRoots } = require('./server')
 // builds. Without it the app never touches the network for updates.
 const UPDATE_URL = process.env.DSH_DESKTOP_UPDATE_URL || ''
 let autoUpdater = null
+let updateReady = false
+let installingUpdate = false
 
 const SMOKE = process.argv.includes('--smoke')
 
@@ -51,11 +53,8 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-    }
+    // showMainWindow recreates the window when it was closed (tray mode).
+    showMainWindow()
   })
 }
 
@@ -164,8 +163,12 @@ function buildMenu() {
   }
   const helpSubmenu = [
     {
-      label: 'DeepSeek Harness 仓库',
+      label: 'DeepSeek Harness 官方仓库',
       click: () => shell.openExternal('https://github.com/deepseek-ai/deepseek-harness'),
+    },
+    {
+      label: '本项目仓库',
+      click: () => shell.openExternal('https://github.com/zfx2012/deepseek_harness_desktop'),
     },
     { label: '关于', role: 'about' },
   ]
@@ -244,10 +247,18 @@ async function checkForUpdates() {
       defaultId: 0,
       message: `发现新版本 ${version}（当前 ${app.getVersion()}），是否下载并安装？`,
     })
-    if (choice.response === 0) {
-      autoUpdater.autoDownload = true
-      await autoUpdater.downloadUpdate()
-      dialog.showMessageBox({ type: 'info', message: '更新已下载，将在退出时安装。' })
+    if (choice.response !== 0) return
+    await autoUpdater.downloadUpdate()
+    updateReady = true
+    const installChoice = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['立即重启并安装', '退出时安装'],
+      defaultId: 0,
+      message: '更新已下载完成。',
+    })
+    if (installChoice.response === 0) {
+      installingUpdate = true
+      autoUpdater.quitAndInstall()
     }
   } catch (error) {
     dialog.showMessageBox({ type: 'error', message: `检查更新失败：${error.message}` })
@@ -321,6 +332,12 @@ app.whenReady().then(() => {
   registerIpc()
   initAutoUpdater()
 
+  if (SMOKE_UPDATE) {
+    // Update-feed verification is standalone: no window, no server child.
+    runSmokeUpdate()
+    return
+  }
+
   navigateMain()
   diag('calling server.start()')
   server.start()
@@ -337,6 +354,12 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   isQuitting = true
   if (server) server.dispose()
+  // A downloaded update installs on quit (AUDIT-v2 P2-3): hand over to
+  // electron-updater once, guarded so quitAndInstall's own re-quit is a no-op.
+  if (updateReady && !installingUpdate && autoUpdater) {
+    installingUpdate = true
+    autoUpdater.quitAndInstall()
+  }
 })
 
 /** Read the bundled-harness manifest (provenance) from the known locations. */
@@ -370,7 +393,8 @@ function registerIpc() {
       harnessVersion: manifest ? manifest.harnessVersion : null,
       builtAt: manifest ? manifest.builtAt : null,
       packageCount: manifest ? manifest.packageCount : null,
-      harnessCheckout: manifest ? manifest.harnessCheckout : null,
+      // Note: the manifest's harnessCheckout is a build-machine path and is
+      // intentionally NOT exposed here (AUDIT-v2 P3-10).
     }
   })
   ipcMain.handle('dsh:get-settings', () => {

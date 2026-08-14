@@ -11,6 +11,7 @@
     4. bundled smoke        (packaged exe --smoke-bundled: MUST use resources/harness)
     5. error-path smoke     (packaged exe --smoke-error: invalid harness path -> error card)
     6. no-node smoke        (packaged exe with stripped PATH: ELECTRON_RUN_AS_NODE fallback)
+    7. update-feed smoke    (packaged exe --smoke-update: discovers v0.2.0 from a local feed)
 
   Any failure aborts with a non-zero exit code. Use from the repo root:
     pwsh scripts/verify.ps1
@@ -45,8 +46,10 @@ function Run-Smoke {
     [System.IO.File]::WriteAllText((Join-Path $UserData 'config.json'), $ConfigJson, [System.Text.UTF8Encoding]::new($false))
   }
   $env:DSH_DESKTOP_USERDATA = $UserData
+  $savedEnv = @{}
   foreach ($kv in $ExtraEnv) {
     $k, $v = $kv -split '=', 2
+    $savedEnv[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
     Set-Item -Path "Env:$k" -Value $v
   }
   try {
@@ -62,7 +65,13 @@ function Run-Smoke {
     Get-Content $out -Tail 3
   } finally {
     Remove-Item Env:DSH_DESKTOP_USERDATA -ErrorAction SilentlyContinue
-    foreach ($kv in $ExtraEnv) { Remove-Item "Env:$($kv.Split('=')[0])" -ErrorAction SilentlyContinue }
+    foreach ($k in $savedEnv.Keys) {
+      if ($null -eq $savedEnv[$k]) {
+        Remove-Item "Env:$k" -ErrorAction SilentlyContinue
+      } else {
+        Set-Item -Path "Env:$k" -Value $savedEnv[$k]
+      }
+    }
   }
 }
 
@@ -98,8 +107,36 @@ Invoke-Step 'no-node smoke (ELECTRON_RUN_AS_NODE)' {
     -ConfigJson $config -UserData $noNodeHome -ExtraEnv @('Path=C:\Windows\System32;C:\Windows')
 }
 
+# 7. update-feed smoke — the packaged app must discover version 0.2.0 from a
+# local generic feed (electron-updater end-to-end discovery, AUDIT-v2 P2-2)
+$updateHome = Join-Path $root '.verify-update-home'
+$feedPort = 18765
+Invoke-Step 'update-feed smoke' {
+  $nodeExe = (Get-Command node -ErrorAction Stop).Source
+  $feed = Start-Process -FilePath $nodeExe -ArgumentList 'scripts/update-feed.mjs', '--port', $feedPort `
+    -WorkingDirectory $root -PassThru -WindowStyle Hidden
+  try {
+    $ready = $false
+    for ($i = 0; $i -lt 20; $i++) {
+      try {
+        $null = Invoke-WebRequest -Uri "http://127.0.0.1:$feedPort/latest.yml" -UseBasicParsing -TimeoutSec 2
+        $ready = $true
+        break
+      } catch {
+        Start-Sleep -Milliseconds 300
+      }
+    }
+    if (-not $ready) { throw "update-feed did not come up on port $feedPort" }
+    Run-Smoke -Label 'update' -SmokeArgs @('--smoke-update') `
+      -ConfigJson $null -UserData $updateHome `
+      -ExtraEnv @("DSH_DESKTOP_UPDATE_URL=http://127.0.0.1:$feedPort/", 'DSH_DESKTOP_EXPECT_VERSION=0.2.0')
+  } finally {
+    Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+
 # cleanup
-Remove-Item -Recurse -Force $smokeHome, $errHome, $noNodeHome -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $smokeHome, $errHome, $noNodeHome, $updateHome -ErrorAction SilentlyContinue
 Get-ChildItem $root -Filter '.verify-*-out.txt' -ErrorAction SilentlyContinue | Remove-Item -Force
 Get-ChildItem $root -Filter '.verify-*-err.txt' -ErrorAction SilentlyContinue | Remove-Item -Force
 

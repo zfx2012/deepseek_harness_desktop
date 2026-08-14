@@ -2,8 +2,8 @@
 'use strict'
 
 /**
- * Bundle the DeepSeek Harness CLI into harness-deploy/ so electron-builder can
- * ship it as extraResources (resources/harness in the packaged app).
+ * Bundle the DeepSeek Harness CLI into harness-deploy/ so the afterPack hook
+ * ships it as resources/harness in the packaged app.
  *
  * Delegates to build-closure.mjs, which materializes a self-contained
  * production dependency closure from a working harness checkout (pnpm's own

@@ -50,6 +50,7 @@ powershell -File scripts/verify.ps1  # 全量验证链（打包 + 三种 smoke�
 | `npm run smoke` | GUI 加载成功 → `SMOKE_OK <url> harnessSource=<source>` |
 | `npm run smoke:bundled` | **必须**使用打包内置 harness（`harnessSource=bundled`），否则 FAIL |
 | `npm run smoke:error` | 显式无效 harness 路径 → 错误页渲染且按钮可用 → `SMOKE_ERROR_OK` |
+| `npm run smoke:update` | 需打包版：从 `DSH_DESKTOP_UPDATE_URL` 检出 `DSH_DESKTOP_EXPECT_VERSION` → `SMOKE_UPDATE_OK`（配合 `scripts/update-feed.mjs` 本地 feed） |
 
 `DSH_DESKTOP_HARNESS` 环境变量可覆盖 harness 路径（也可在设置页里改）。
 
