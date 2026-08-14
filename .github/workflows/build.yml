@@ -1,0 +1,71 @@
+name: build-desktop
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install desktop deps
+        run: pnpm install --ignore-scripts
+
+      - name: Restore Electron binary
+        run: node node_modules/electron/install.js
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      # The 280MB harness closure is cached. On a miss, bundle-harness.mjs
+      # auto-fetches the official repo (shallow clone into .harness-checkout,
+      # pnpm install + build) — no repo variables needed. Bump the cache key
+      # when the bundled harness version changes.
+      - name: Restore bundled harness (cache)
+        id: harness-cache
+        uses: actions/cache@v4
+        with:
+          path: harness-deploy
+          key: harness-bundle-v2-rc5
+
+      - name: Bundle harness closure (auto-fetches the official repo on miss)
+        if: steps.harness-cache.outputs.cache-hit != 'true'
+        run: node scripts/bundle-harness.mjs --force
+
+      # Full verification: unit tests -> bundle validation -> package ->
+      # bundled smoke -> error smoke -> no-node smoke -> update-feed smoke.
+      - name: Verify (tests + package + smoke suite)
+        shell: pwsh
+        run: pwsh scripts/verify.ps1
+        env:
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      - name: Build installers (NSIS + portable)
+        run: npm run dist
+        env:
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
