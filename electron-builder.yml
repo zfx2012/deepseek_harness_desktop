@@ -25,7 +25,6 @@ win:
   icon: assets/icon.ico
   target:
     - nsis
-    - portable
   artifactName: ${productName}-${version}-${arch}.${ext}
 nsis:
   oneClick: false
@@ -38,5 +37,3 @@ nsis:
   # so an installer placed inside the install dir can still upgrade in place.
   # customInit also sets the default install dir to Program Files\DeepSeekHarnessDesktop.
   include: scripts/installer.nsh
-portable:
-  artifactName: ${productName}-${version}-portable-${arch}.${ext}

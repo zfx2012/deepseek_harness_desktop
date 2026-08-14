@@ -5,7 +5,7 @@
  * Publish a GitHub Release for DeepSeek Harness Desktop.
  *
  * - Creates the release (tag must exist or be pushed first)
- * - Uploads the installer artifacts from release/ (NSIS, portable,
+ * - Uploads the installer artifacts from release/ (NSIS,
  *   latest.yml, blockmap) as release assets
  *
  * Auth: reuses the git credential manager's cached github.com token
@@ -63,7 +63,6 @@ function bodyText() {
       '## 安装包',
       '',
       '- `DeepSeek Harness Desktop-<ver>-x64.exe`：NSIS 安装包（可选安装目录）',
-      '- `DeepSeek Harness Desktop-<ver>-portable-x64.exe`：便携版（免安装）',
       '',
       '内置官方发布版 Harness 内核，安装即用（无需 Node，自动回退内置运行时）。',
       '',
