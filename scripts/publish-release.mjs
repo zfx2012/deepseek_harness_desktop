@@ -145,6 +145,16 @@ function sameAsset(name, target) {
   return name === target || name === target.replace(/ /g, '.')
 }
 
+/** Poll the release assets until `name` shows up (GitHub lands uploads async). */
+async function waitForAsset(releaseId, name, token, tries = 6) {
+  for (let i = 0; i < tries; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10000))
+    const existing = await releaseAssets(releaseId, token)
+    if (existing.some((a) => sameAsset(a.name, name))) return true
+  }
+  return false
+}
+
 async function uploadAsset(release, file, token) {
   const name = path.basename(file)
   const data = readFileSync(file)
@@ -158,15 +168,14 @@ async function uploadAsset(release, file, token) {
         token,
       )
     } catch (error) {
-      // The connection may drop AFTER GitHub accepted the upload — check
-      // whether the asset actually landed before retrying.
-      const existing = await releaseAssets(release.id, token)
-      if (existing.some((a) => sameAsset(a.name, name))) {
+      // The connection may drop AFTER GitHub accepted the upload — poll the
+      // asset list before retrying (GitHub lands large uploads asynchronously).
+      if (await waitForAsset(release.id, name, token)) {
         console.log(`  -> received by GitHub (${error.cause?.code ?? error.message})`)
         return
       }
       if (attempt === 3) throw error
-      console.log(`  -> ${error.cause?.code ?? error.message}, retrying…`)
+      console.log(`  -> ${error.cause?.code ?? error.message}, not landed yet, retrying…`)
       await new Promise((resolve) => setTimeout(resolve, attempt * 5000))
       continue
     }
