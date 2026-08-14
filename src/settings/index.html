@@ -95,8 +95,8 @@
 
     <div class="field">
       <label for="port">监听端口</label>
-      <input type="number" id="port" min="1" max="65535" style="max-width: 140px;" />
-      <div class="hint">默认 3080（与 dsh 官方默认一致）；与其他实例冲突时请换一个端口。</div>
+      <input type="number" id="port" min="0" max="65535" style="max-width: 140px;" />
+      <div class="hint">默认 0 = 系统自动分配空闲端口（无冲突）；需固定端口时填 1–65535。</div>
     </div>
 
     <div class="field check">

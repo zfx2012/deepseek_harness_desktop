@@ -257,8 +257,7 @@ class ServerManager {
 
     const port = this.settings.get('port') || this.defaults.port || 0
     const args = [bin, 'web']
-    // Always pass an explicit port: the composed default is 3080, which
-    // collides with any other dsh web instance. 0 = OS-assigned free port.
+    // Always pass an explicit port: 0 = OS-assigned free port (no conflicts).
     args.push('--port', String(port > 0 ? port : 0))
 
     const home = this.settings.get('dshHome') || this.defaults.dshHome || ''

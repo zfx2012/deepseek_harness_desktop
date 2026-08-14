@@ -28,8 +28,8 @@ let autoUpdater = null
 let updateReady = false
 let installingUpdate = false
 
-/** Default listen port (the dsh CLI's own default). */
-const DEFAULT_PORT = 3080
+/** Default listen port: 0 lets the OS assign a free port (never conflicts). */
+const DEFAULT_PORT = 0
 
 /**
  * The app's install directory: where the executable lives (packaged), or the

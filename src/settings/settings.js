@@ -68,8 +68,8 @@ async function load() {
 
 async function save() {
   const port = Number.parseInt(els.port.value, 10)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    setStatus('端口必须是 1–65535 之间的整数。', 'err')
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    setStatus('端口必须是 0–65535 之间的整数（0 = 自动分配空闲端口）。', 'err')
     els.port.focus()
     return
   }

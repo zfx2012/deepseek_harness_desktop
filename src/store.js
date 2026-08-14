@@ -13,7 +13,7 @@ const DEFAULTS = Object.freeze({
   harnessPath: '',
   /** DSH_HOME for the spawned server; '' falls back to the effective default (~/.dsh). */
   dshHome: '',
-  /** Listen port; 0 falls back to the effective default (3080). */
+  /** Listen port; 0 lets the OS assign a free port. */
   port: 0,
   /** Restart the server automatically if it exits unexpectedly. */
   autoRestart: true,
