@@ -271,7 +271,13 @@ function buildMenu() {
           label: '打开服务器日志文件',
           click: () => {
             const logFile = path.join(app.getPath('userData'), 'server.log')
-            shell.showItemInFolder(logFile)
+            // Open directly in Notepad (detached so it outlives the app).
+            try {
+              const child = spawn('notepad.exe', [logFile], { detached: true, stdio: 'ignore', windowsHide: false })
+              child.unref()
+            } catch (error) {
+              shell.showItemInFolder(logFile) // fallback: reveal the file
+            }
           },
         },
       ],
