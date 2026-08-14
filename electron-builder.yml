@@ -32,5 +32,8 @@ nsis:
   createDesktopShortcut: always
   createStartMenuShortcut: true
   shortcutName: DeepSeek Harness Desktop
+  # Custom running-app check: never match the installer/uninstaller itself,
+  # so an installer placed inside the install dir can still upgrade in place.
+  include: scripts/installer.nsh
 portable:
   artifactName: ${productName}-${version}-portable-${arch}.${ext}
