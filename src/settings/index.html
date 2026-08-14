@@ -89,9 +89,14 @@
   </div>
   <div id="status"></div>
 
-  <details style="margin-top: 14px;">
+  <details style="margin-top: 14px;" open>
     <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">关于 / 内置 Harness 信息</summary>
     <pre class="log" id="about" style="max-height: 220px;"></pre>
+    <div class="row" style="margin-top: 8px;">
+      <button id="checkUpdate" class="primary">检测内核更新</button>
+      <button id="openOfficial" class="secondary" style="display: none;">前往官方仓库</button>
+    </div>
+    <div id="updateStatus" style="margin-top: 8px; font-size: 12px; min-height: 16px; color: #8b93a3;"></div>
   </details>
 
   <details style="margin-top: 8px;">

@@ -29,8 +29,10 @@ contextBridge.exposeInMainWorld('dsh', {
 
   // provenance
   getBundleInfo: () => ipcRenderer.invoke('dsh:get-bundle-info'),
+  checkHarnessUpdate: () => ipcRenderer.invoke('dsh:check-harness-update'),
 
   // control
   restartServer: () => ipcRenderer.invoke('dsh:restart-server'),
   openSettings: () => ipcRenderer.send('dsh:open-settings'),
+  openExternal: (url) => ipcRenderer.invoke('dsh:open-external', url),
 })

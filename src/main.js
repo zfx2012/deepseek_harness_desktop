@@ -17,6 +17,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const { SettingsStore } = require('./store')
 const { ServerManager, detectHarnessRoots } = require('./server')
+const { compareVersions, fetchOfficialHarnessVersion } = require('./harness-update')
 
 // Auto-update is opt-in: set DSH_DESKTOP_UPDATE_URL to a generic feed URL
 // (e.g. https://example.com/releases/) to enable update checks in packaged
@@ -397,6 +398,19 @@ function registerIpc() {
       // intentionally NOT exposed here (AUDIT-v2 P3-10).
     }
   })
+  // Kernel (harness) update check against the official repository. The check
+  // URL is hardcoded in harness-update.js and never shown in the UI.
+  ipcMain.handle('dsh:check-harness-update', async () => {
+    const manifest = readBundleManifest()
+    const current = manifest ? manifest.harnessVersion : null
+    try {
+      const { latest, repoUrl } = await fetchOfficialHarnessVersion()
+      const hasUpdate = current !== null && compareVersions(latest, current) > 0
+      return { ok: true, current, latest, hasUpdate, repoUrl }
+    } catch (error) {
+      return { ok: false, current, latest: null, hasUpdate: false, error: error.message }
+    }
+  })
   ipcMain.handle('dsh:get-settings', () => {
     const s = settingsStore
     return {
@@ -429,6 +443,10 @@ function registerIpc() {
     return true
   })
   ipcMain.on('dsh:open-settings', openSettingsWindow)
+  ipcMain.handle('dsh:open-external', (_event, url) => {
+    if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url)
+    return true
+  })
 }
 
 // ── smoke verification (--smoke / --smoke-bundled / --smoke-error / --smoke-update) ─

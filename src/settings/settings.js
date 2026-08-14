@@ -109,4 +109,35 @@ window.dsh.getBundleInfo().then((info) => {
   document.getElementById('about').textContent = lines.join('\n')
 })
 
+// Kernel update check against the official harness repository (the URL is
+// hardcoded in the main process and never shown here).
+const updateStatus = document.getElementById('updateStatus')
+const openOfficial = document.getElementById('openOfficial')
+let officialRepoUrl = null
+
+document.getElementById('checkUpdate').addEventListener('click', async () => {
+  updateStatus.textContent = '正在检测内核更新…'
+  updateStatus.className = 'ok'
+  openOfficial.style.display = 'none'
+  const result = await window.dsh.checkHarnessUpdate()
+  if (!result.ok) {
+    updateStatus.textContent = `检测失败：${result.error || '网络错误'}`
+    updateStatus.className = 'err'
+    return
+  }
+  if (result.hasUpdate) {
+    updateStatus.textContent = `发现新版本：${result.latest}（内置 ${result.current}）。建议等待桌面端新版本，或重新打包内置内核。`
+    updateStatus.className = 'ok'
+    officialRepoUrl = result.repoUrl
+    openOfficial.style.display = ''
+  } else {
+    updateStatus.textContent = `内核已是最新（${result.current || result.latest}）。`
+    updateStatus.className = 'ok'
+  }
+})
+
+openOfficial.addEventListener('click', () => {
+  if (officialRepoUrl) window.dsh.openExternal(officialRepoUrl)
+})
+
 load()
