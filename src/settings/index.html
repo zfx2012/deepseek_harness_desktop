@@ -5,125 +5,247 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
   <title>设置 — DeepSeek Harness Desktop</title>
   <style>
-    :root { color-scheme: dark; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: #0f1115; color: #d7dbe2;
-      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-      font-size: 13px; padding: 24px 28px 28px;
+    :root {
+      color-scheme: dark;
+      --bg: #0d0f14;
+      --bg-card: #131722;
+      --bg-input: #0f141d;
+      --border: #232b3a;
+      --border-strong: #2e3950;
+      --text: #dfe4ee;
+      --text-dim: #8a94a7;
+      --text-faint: #5c6677;
+      --accent: #4f6ef7;
+      --accent-2: #8a5cf6;
+      --ok: #4cc38a;
+      --warn: #e5a23c;
+      --err: #e5656b;
     }
-    .wrap { max-width: 760px; margin: 0 auto; }
-    h1 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #28303f; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #35405a; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 13px; padding: 28px 28px 36px;
+      line-height: 1.55;
+    }
+    .wrap { max-width: 780px; margin: 0 auto; }
+
+    /* ── header ─────────────────────────────────────────────── */
+    .header { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+    .logo {
+      width: 46px; height: 46px; border-radius: 12px; flex: none;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 17px; color: #fff; letter-spacing: 0.5px;
+      box-shadow: 0 4px 16px rgba(79, 110, 247, 0.35);
+    }
+    .header h1 { font-size: 17px; font-weight: 650; letter-spacing: 0.2px; }
+    .header .sub { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+
+    /* ── cards & sections ───────────────────────────────────── */
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px 20px; margin-bottom: 16px;
+    }
+    .card-title {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 650; color: var(--text);
+      margin-bottom: 14px; letter-spacing: 0.2px;
+    }
+    .card-title::before {
+      content: ""; width: 3px; height: 13px; border-radius: 2px;
+      background: linear-gradient(var(--accent), var(--accent-2));
+    }
+
+    /* ── server status strip ────────────────────────────────── */
+    .server-strip {
+      display: flex; flex-direction: column; gap: 8px;
+      background: linear-gradient(180deg, rgba(79, 110, 247, 0.07), transparent), var(--bg-card);
+      border: 1px solid var(--border); border-radius: 14px;
+      padding: 14px 18px; margin-bottom: 16px;
+    }
+    .strip-row { display: flex; align-items: center; gap: 10px; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; flex: none;
+      background: var(--text-faint); position: relative;
+    }
+    .dot.idle { background: var(--text-faint); }
+    .dot.starting { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+    .dot.ready { background: var(--ok); box-shadow: 0 0 8px rgba(76, 195, 138, 0.7); }
+    .dot.error { background: var(--err); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    #server-phase { font-weight: 650; color: var(--text); font-size: 13px; }
+    #server-url {
+      color: var(--ok); font-size: 11.5px; word-break: break-all;
+      padding: 6px 10px; border-radius: 8px; background: rgba(76, 195, 138, 0.08);
+      border: 1px solid rgba(76, 195, 138, 0.2);
+    }
+    #server-error {
+      color: var(--err); font-size: 12px; line-height: 1.6;
+      padding: 8px 10px; border-radius: 8px; background: rgba(229, 101, 107, 0.08);
+      border: 1px solid rgba(229, 101, 107, 0.22);
+    }
+
+    /* ── form fields ────────────────────────────────────────── */
     .field { margin-bottom: 16px; }
-    label { display: block; font-weight: 600; margin-bottom: 6px; color: #aab1bf; }
+    .field:last-child { margin-bottom: 0; }
+    .field > label {
+      display: block; font-size: 12px; font-weight: 600;
+      color: var(--text-dim); margin-bottom: 7px; letter-spacing: 0.2px;
+    }
     .row { display: flex; gap: 8px; }
     input[type="text"], input[type="number"] {
-      flex: 1; padding: 8px 10px; border: 1px solid #2a303c; border-radius: 8px;
-      background: #161a22; color: #e3e7ee; font-size: 12px; outline: none;
+      flex: 1; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px;
+      background: var(--bg-input); color: var(--text); font-size: 12.5px; outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
-    input:focus { border-color: #4f6ef7; }
-    input[type="checkbox"] { accent-color: #4f6ef7; width: 15px; height: 15px; }
+    input:hover { border-color: var(--border-strong); }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.18); }
+    input::placeholder { color: var(--text-faint); }
+    input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+    .hint { font-size: 11px; color: var(--text-faint); margin-top: 6px; line-height: 1.55; }
+    .check { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg-input); cursor: pointer; }
+    .check label { margin: 0; font-size: 12.5px; color: var(--text); cursor: pointer; }
+
+    /* ── buttons ────────────────────────────────────────────── */
     button {
-      padding: 8px 14px; border: 0; border-radius: 8px; background: #262b36;
-      color: #d7dbe2; font-size: 12px; cursor: pointer; white-space: nowrap;
+      padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 9px;
+      background: #1b2130; color: var(--text); font-size: 12px; cursor: pointer;
+      white-space: nowrap; transition: all 0.15s ease; font-family: inherit;
     }
-    button.primary { background: #4f6ef7; color: #fff; }
-    button:disabled { opacity: 0.5; cursor: default; }
-    button:hover:not(:disabled) { filter: brightness(1.15); }
-    .hint { font-size: 11px; color: #6f7887; margin-top: 5px; line-height: 1.5; }
-    .check { display: flex; align-items: center; gap: 8px; }
-    .check label { margin: 0; }
-    #status { margin-top: 14px; font-size: 12px; min-height: 18px; color: #8b93a3; }
-    #status.ok { color: #6fbf73; }
-    #status.err { color: #e06c6c; }
-    .actions { margin-top: 18px; display: flex; gap: 10px; }
+    button:hover:not(:disabled) { border-color: #3d4a68; background: #232b3d; }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    button:disabled { opacity: 0.45; cursor: default; }
+    button.primary {
+      border: 0; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #fff; font-weight: 600; box-shadow: 0 2px 10px rgba(79, 110, 247, 0.3);
+    }
+    button.primary:hover:not(:disabled) { filter: brightness(1.1); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    button.ghost { border-color: transparent; background: transparent; color: var(--text-dim); }
+    button.ghost:hover:not(:disabled) { color: var(--text); background: #1b2130; border-color: var(--border); }
+
+    /* ── status / actions ───────────────────────────────────── */
+    .actions { display: flex; gap: 10px; margin-top: 18px; }
+    #status { margin-top: 12px; font-size: 12px; min-height: 18px; color: var(--text-dim); }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--err); }
+
+    /* ── collapsible panels ─────────────────────────────────── */
+    details.card { padding: 0; overflow: hidden; }
+    details.card summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center;
+      gap: 8px; padding: 13px 18px; font-size: 12.5px; font-weight: 600;
+      color: var(--text-dim); user-select: none; transition: color 0.15s ease;
+    }
+    details.card summary::-webkit-details-marker { display: none; }
+    details.card summary:hover { color: var(--text); }
+    details.card summary::before { content: "▸"; font-size: 11px; transition: transform 0.15s ease; color: var(--text-faint); }
+    details.card[open] summary::before { transform: rotate(90deg); }
+    details.card .panel-body { padding: 0 18px 18px; }
+
     pre.log {
-      margin-top: 14px; padding: 10px; border-radius: 8px; background: #161a22;
-      font-size: 10.5px; color: #98a0b3; max-height: 140px; overflow: auto;
-      white-space: pre-wrap; word-break: break-all;
+      padding: 12px; border-radius: 9px; background: var(--bg-input);
+      border: 1px solid var(--border);
+      font-size: 10.5px; color: var(--text-dim); max-height: 150px; overflow: auto;
+      white-space: pre-wrap; word-break: break-all; font-family: "Cascadia Mono", Consolas, monospace;
     }
+    #about { margin-bottom: 10px; }
+
+    /* ── kernel update area ─────────────────────────────────── */
+    .update-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    #updateStatus { margin-top: 10px; font-size: 12px; min-height: 16px; color: var(--text-dim); line-height: 1.55; }
+    #updateStatus.ok { color: var(--ok); }
+    #updateStatus.err { color: var(--err); }
+
     .hidden { display: none !important; }
-    /* server status strip */
-    .server-strip {
-      margin-bottom: 22px; padding: 12px 14px; border: 1px solid #232936;
-      border-radius: 10px; background: #12161e;
-    }
-    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #565e70; margin-right: 8px; flex: none; }
-    .dot.idle { background: #565e70; }
-    .dot.starting { background: #d9a13b; }
-    .dot.ready { background: #3f8f4f; }
-    .dot.error { background: #e06c6c; }
-    #server-phase { font-weight: 600; color: #c6cbd6; }
-    #server-url { color: #6fbf73; font-size: 11px; margin-top: 4px; word-break: break-all; }
-    #server-error { margin-top: 8px; color: #e06c6c; font-size: 12px; line-height: 1.5; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>DeepSeek Harness 桌面端设置</h1>
+    <div class="header">
+      <div class="logo">DSH</div>
+      <div>
+        <h1>DeepSeek Harness 桌面端</h1>
+        <div class="sub">设置 · 状态 · 内核更新</div>
+      </div>
+    </div>
 
     <div class="server-strip">
-      <div class="row" style="align-items: center;">
+      <div class="strip-row">
         <span id="server-dot" class="dot idle"></span>
         <span id="server-phase">正在加载…</span>
         <span style="flex: 1;"></span>
-        <button id="openGui" class="primary hidden">打开 Web 界面</button>
         <button id="retry" class="hidden">重试</button>
       </div>
       <div id="server-url" class="hidden"></div>
       <div id="server-error" class="hidden"></div>
     </div>
 
-    <div class="field">
-      <label for="harnessPath">Harness 路径（dsh 源码/部署目录，包含 apps/cli/lib/bin.js）</label>
-      <div class="row">
-        <input type="text" id="harnessPath" />
-        <button id="browseHarness">浏览…</button>
-        <button id="detectHarness">自动检测</button>
+    <div class="card">
+      <div class="card-title">服务器设置</div>
+
+      <div class="field">
+        <label for="harnessPath">Harness 路径（dsh 源码 / 部署目录，包含 lib\bin.js）</label>
+        <div class="row">
+          <input type="text" id="harnessPath" />
+          <button id="browseHarness">浏览…</button>
+          <button id="detectHarness">自动检测</button>
+        </div>
+        <div class="hint">默认 resources\harness，即安装目录下的内置内核（相对安装目录解析，移动应用目录后依然有效）。</div>
       </div>
-      <div class="hint">默认 resources\harness，即安装目录下的内置内核（相对安装目录解析，移动应用目录后依然有效）。</div>
-    </div>
 
-    <div class="field">
-      <label for="dshHome">DSH_HOME 数据目录（会话、设置、插件配置）</label>
-      <div class="row">
-        <input type="text" id="dshHome" />
-        <button id="browseHome">浏览…</button>
+      <div class="field">
+        <label for="dshHome">DSH_HOME 数据目录（会话、设置、插件配置）</label>
+        <div class="row">
+          <input type="text" id="dshHome" />
+          <button id="browseHome">浏览…</button>
+        </div>
+        <div class="hint">默认 ~/.dsh（用户主目录下的 .dsh）。</div>
       </div>
-      <div class="hint">默认 ~/.dsh（用户主目录下的 .dsh）。</div>
-    </div>
 
-    <div class="field">
-      <label for="port">监听端口</label>
-      <input type="number" id="port" min="0" max="65535" style="max-width: 140px;" />
-      <div class="hint">默认 0 = 系统自动分配空闲端口（无冲突）；需固定端口时填 1–65535。</div>
-    </div>
-
-    <div class="field check">
-      <input type="checkbox" id="autoRestart" />
-      <label for="autoRestart">服务器意外退出时自动重启</label>
-    </div>
-
-    <div class="actions">
-      <button id="save" class="primary">保存并重启服务器</button>
-      <button id="reset">恢复默认</button>
-    </div>
-    <div id="status"></div>
-
-    <details style="margin-top: 14px;" open>
-      <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">关于 / 内置 Harness 信息</summary>
-      <pre class="log" id="about" style="max-height: 220px;"></pre>
-      <div class="row" style="margin-top: 8px;">
-        <button id="checkUpdate" class="primary">检测内核更新</button>
-        <button id="updateNow" class="primary hidden">立即更新</button>
-        <button id="openOfficial" class="secondary hidden">前往官方仓库</button>
+      <div class="field">
+        <label for="port">监听端口</label>
+        <input type="number" id="port" min="0" max="65535" style="max-width: 160px;" />
+        <div class="hint">默认 0 = 系统自动分配空闲端口（无冲突）；需固定端口时填 1–65535。</div>
       </div>
-      <div id="updateStatus" style="margin-top: 8px; font-size: 12px; min-height: 16px; color: #8b93a3;"></div>
+
+      <div class="field check">
+        <input type="checkbox" id="autoRestart" />
+        <label for="autoRestart">服务器意外退出时自动重启</label>
+      </div>
+
+      <div class="actions">
+        <button id="save" class="primary">保存并重启服务器</button>
+        <button id="reset" class="ghost">恢复默认</button>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <details class="card" open>
+      <summary>内核与更新</summary>
+      <div class="panel-body">
+        <pre class="log" id="about" style="max-height: 200px;"></pre>
+        <div class="update-row">
+          <button id="checkUpdate" class="primary">检测内核更新</button>
+          <button id="updateNow" class="primary hidden">立即更新</button>
+          <button id="openOfficial" class="ghost hidden">前往官方仓库</button>
+        </div>
+        <div id="updateStatus"></div>
+      </div>
     </details>
 
-    <details style="margin-top: 8px;">
-      <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">服务器日志（最近 40 行）</summary>
-      <pre class="log" id="log"></pre>
+    <details class="card">
+      <summary>服务器日志（最近 40 行）</summary>
+      <div class="panel-body">
+        <pre class="log" id="log"></pre>
+      </div>
     </details>
   </div>
 

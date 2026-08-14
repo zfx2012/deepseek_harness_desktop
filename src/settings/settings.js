@@ -19,7 +19,6 @@ const serverDot = $('server-dot')
 const serverPhase = $('server-phase')
 const serverUrl = $('server-url')
 const serverError = $('server-error')
-const openGuiBtn = $('openGui')
 const retryBtn = $('retry')
 
 const PHASE_TEXT = {
@@ -39,8 +38,7 @@ function renderState(state) {
   serverError.textContent = isError ? (state.error || '未知错误') : ''
   const isReady = phase === 'ready'
   serverUrl.classList.toggle('hidden', !isReady)
-  serverUrl.textContent = isReady ? `GUI 地址：${state.url}` : ''
-  openGuiBtn.classList.toggle('hidden', !isReady)
+  serverUrl.textContent = isReady ? `GUI 地址：${state.url}（保存设置或重启后自动打开，也可从托盘图标打开）` : ''
   retryBtn.classList.toggle('hidden', !isError)
 }
 
@@ -111,7 +109,6 @@ $('detectHarness').addEventListener('click', async () => {
   }
 })
 
-openGuiBtn.addEventListener('click', () => window.dsh.openGui())
 retryBtn.addEventListener('click', () => window.dsh.restartServer())
 
 window.dsh.getState().then(renderState)

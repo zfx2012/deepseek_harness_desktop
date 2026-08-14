@@ -251,9 +251,10 @@ function buildMenu() {
   }
   const template = [
     {
-      label: '文件',
+      // The main window IS the settings page — the menu says so directly.
+      label: '设置',
       submenu: [
-        { label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => showMainWindow() },
+        { label: '显示设置页', accelerator: 'CmdOrCtrl+,', click: () => showMainWindow() },
         { type: 'separator' },
         { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
@@ -261,7 +262,8 @@ function buildMenu() {
     {
       label: '服务器',
       submenu: [
-        { label: '打开 Web 界面', click: () => openGuiWindow() },
+        // No "open GUI" item here: the GUI opens automatically after a
+        // restart/save (pendingGuiOpen), or via the tray icon menu.
         { label: '重启服务器', accelerator: 'CmdOrCtrl+R', click: () => restartServer() },
         { label: '停止服务器', click: () => server.stop() },
         { type: 'separator' },
