@@ -318,10 +318,13 @@ async function checkForUpdates() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png')
+  // .ico renders reliably in the Windows notification area (multi-size);
+  // fall back to the PNG when the ICO is missing.
+  const iconPath = path.join(__dirname, '..', 'assets', 'icon.ico')
   let icon
   try {
     icon = nativeImage.createFromPath(iconPath)
+    if (icon.isEmpty()) icon = nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon.png'))
     if (icon.isEmpty()) icon = nativeImage.createEmpty()
   } catch {
     icon = nativeImage.createEmpty()
@@ -408,8 +411,12 @@ app.whenReady().then(() => {
   }
 })
 
-// Windows keeps running in the tray when every window is closed; quitting is
-// explicit (menu / tray / CmdOrCtrl+Q).
+// Closing every window quits the app for real (tray stays available while
+// it runs). Quitting disposes the server child (process-tree kill), so a
+// closed app never blocks reinstall/upgrade.
+app.on('window-all-closed', () => {
+  app.quit()
+})
 
 app.on('before-quit', () => {
   isQuitting = true
