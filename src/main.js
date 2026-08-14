@@ -7,17 +7,18 @@
  *  - single-instance lock
  *  - settings store (userData/config.json)
  *  - ServerManager: spawn `dsh web`, readiness, crash handling, process-tree kill
- *  - main window: loading page -> GUI URL once the server reports ready
- *  - settings window (file://) and tray menu
+ *  - main window: the settings page (status strip + settings form + kernel update)
+ *  - GUI window: hosts the dsh web GUI once the server is ready
  *  - `--smoke` mode for automated verification: load the GUI, print SMOKE_OK, exit
  */
 
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell, nativeImage } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
 const { SettingsStore } = require('./store')
-const { ServerManager, detectHarnessRoots } = require('./server')
-const { compareVersions, fetchOfficialHarnessVersion } = require('./harness-update')
+const { ServerManager, detectHarnessRoots, isHarness, resolveInstallRelative } = require('./server')
+const { compareVersions, fetchOfficialHarnessVersion, installHarnessUpdate } = require('./harness-update')
 
 // Auto-update is opt-in: set DSH_DESKTOP_UPDATE_URL to a generic feed URL
 // (e.g. https://example.com/releases/) to enable update checks in packaged
@@ -26,6 +27,42 @@ const UPDATE_URL = process.env.DSH_DESKTOP_UPDATE_URL || ''
 let autoUpdater = null
 let updateReady = false
 let installingUpdate = false
+
+/** Default listen port (the dsh CLI's own default). */
+const DEFAULT_PORT = 3080
+
+/**
+ * The app's install directory: where the executable lives (packaged), or the
+ * project root (dev).
+ */
+function installDir() {
+  return app.isPackaged ? path.dirname(process.execPath) : app.getAppPath()
+}
+
+/**
+ * Default harness location, RELATIVE to the install directory:
+ * <安装目录>\resources\harness (the bundled kernel). Keeping the default
+ * relative means the app — especially the portable build — keeps working
+ * after being moved to another directory.
+ */
+function defaultHarnessPath() {
+  return app.isPackaged ? path.join('resources', 'harness') : 'harness-deploy'
+}
+
+/** Resolve a (possibly relative) harness path against the install directory. */
+function resolveHarnessPath(p) {
+  return resolveInstallRelative(p, installDir())
+}
+
+/** Effective settings: stored value, falling back to the product defaults. */
+function effectiveSettings() {
+  return {
+    harnessPath: settingsStore.get('harnessPath') || defaultHarnessPath(),
+    dshHome: settingsStore.get('dshHome') || path.join(os.homedir(), '.dsh'),
+    port: settingsStore.get('port') || DEFAULT_PORT,
+    autoRestart: settingsStore.get('autoRestart') !== false,
+  }
+}
 
 const SMOKE = process.argv.includes('--smoke')
 
@@ -43,9 +80,11 @@ if (process.env.DSH_DESKTOP_USERDATA) {
 let settingsStore
 let server
 let mainWindow = null
-let settingsWindow = null
+let guiWindow = null
 let tray = null
 let isQuitting = false
+/** Open the GUI window automatically once the server becomes ready. */
+let pendingGuiOpen = false
 
 // ── single instance ──────────────────────────────────────────────────────────
 
@@ -68,23 +107,9 @@ function sendToWindow(win, channel, payload) {
 function broadcastState() {
   const state = server.state
   sendToWindow(mainWindow, 'dsh:state', state)
-  sendToWindow(settingsWindow, 'dsh:state', state)
 }
 
-/** Load the GUI URL or the built-in shell page into the main window. */
-function navigateMain() {
-  if (!mainWindow) return
-  const { phase, url } = server.state
-  if (phase === 'ready' && url) {
-    mainWindow.loadURL(url)
-  } else {
-    const view = phase === 'error' ? 'error' : phase === 'idle' ? 'stopped' : 'loading'
-    mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'), {
-      query: { phase: view },
-    })
-  }
-}
-
+/** The main window is the settings page: it never navigates away. */
 function createMainWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -113,30 +138,32 @@ function createMainWindow() {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    const current = server.state.url
-    if (current && url.startsWith(current)) return
     if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) return
     event.preventDefault()
     if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
   })
+  win.loadFile(path.join(__dirname, 'settings', 'index.html'))
   return win
 }
 
-function openSettingsWindow() {
-  if (settingsWindow && !settingsWindow.isDestroyed()) {
-    settingsWindow.show()
-    settingsWindow.focus()
+/** Show (or create) the window hosting the dsh web GUI. */
+function openGuiWindow() {
+  const url = server.state.url
+  if (!url) return
+  if (guiWindow && !guiWindow.isDestroyed()) {
+    if (guiWindow.webContents.getURL() !== url) guiWindow.loadURL(url)
+    guiWindow.show()
+    guiWindow.focus()
     return
   }
-  settingsWindow = new BrowserWindow({
-    width: 560,
-    height: 620,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    title: 'DeepSeek Harness 桌面端设置',
-    autoHideMenuBar: true,
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    minWidth: 900,
+    minHeight: 600,
+    show: false,
+    title: 'DeepSeek Harness',
+    backgroundColor: '#0f1115',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -144,11 +171,34 @@ function openSettingsWindow() {
       sandbox: true,
     },
   })
-  settingsWindow.setMenuBarVisibility(false)
-  settingsWindow.loadFile(path.join(__dirname, 'settings', 'index.html'))
-  settingsWindow.on('closed', () => {
-    settingsWindow = null
+  guiWindow = win
+  win.on('ready-to-show', () => {
+    win.show()
   })
+  win.on('closed', () => {
+    if (guiWindow === win) guiWindow = null
+  })
+  win.webContents.setWindowOpenHandler(({ url: target }) => {
+    if (target.startsWith('http://') || target.startsWith('https://')) shell.openExternal(target)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, target) => {
+    if (target.startsWith('http://127.0.0.1') || target.startsWith('http://localhost')) return
+    event.preventDefault()
+    if (target.startsWith('http://') || target.startsWith('https://')) shell.openExternal(target)
+  })
+  win.loadURL(url)
+}
+
+/** Keep the GUI window in step with the server: reload on new URL, close on stop. */
+function syncGuiWindow() {
+  const { phase, url } = server.state
+  if (!guiWindow || guiWindow.isDestroyed()) return
+  if (phase === 'ready' && url) {
+    if (guiWindow.webContents.getURL() !== url) guiWindow.loadURL(url)
+  } else {
+    guiWindow.destroy()
+  }
 }
 
 function buildMenu() {
@@ -180,7 +230,7 @@ function buildMenu() {
     {
       label: '文件',
       submenu: [
-        { label: '设置…', accelerator: 'CmdOrCtrl+,', click: openSettingsWindow },
+        { label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => showMainWindow() },
         { type: 'separator' },
         { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
@@ -188,6 +238,7 @@ function buildMenu() {
     {
       label: '服务器',
       submenu: [
+        { label: '打开 Web 界面', click: () => openGuiWindow() },
         { label: '重启服务器', accelerator: 'CmdOrCtrl+R', click: () => restartServer() },
         { label: '停止服务器', click: () => server.stop() },
         { type: 'separator' },
@@ -278,8 +329,8 @@ function createTray() {
   tray = new Tray(icon)
   tray.setToolTip('DeepSeek Harness Desktop')
   const menu = Menu.buildFromTemplate([
-    { label: '显示主窗口', click: () => showMainWindow() },
-    { label: '设置…', click: openSettingsWindow },
+    { label: '显示主窗口（设置）', click: () => showMainWindow() },
+    { label: '打开 Web 界面', click: () => openGuiWindow() },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
   ])
@@ -296,13 +347,12 @@ function showMainWindow() {
   }
   // Window was closed: recreate it (tray-only mode must stay recoverable).
   mainWindow = createMainWindow()
-  navigateMain()
   mainWindow.show()
 }
 
 function restartServer() {
+  pendingGuiOpen = true // reopen the GUI once the new boot is ready
   server.start({ quiet: true })
-  navigateMain()
 }
 
 // ── app lifecycle ────────────────────────────────────────────────────────────
@@ -314,17 +364,27 @@ app.whenReady().then(() => {
   settingsStore = new SettingsStore(app.getPath('userData'))
   server = new ServerManager({
     settings: settingsStore,
+    defaults: {
+      harnessPath: defaultHarnessPath(),
+      dshHome: path.join(os.homedir(), '.dsh'),
+      port: DEFAULT_PORT,
+      installDir: installDir(),
+    },
     logFile: path.join(app.getPath('userData'), 'server.log'),
     onState: () => {
       broadcastState()
-      navigateMain()
+      syncGuiWindow()
+      if (pendingGuiOpen && server.state.phase === 'ready') {
+        pendingGuiOpen = false
+        openGuiWindow()
+      }
     },
     onLog: (line) => {
-      sendToWindow(settingsWindow, 'dsh:log', String(line))
+      sendToWindow(mainWindow, 'dsh:log', String(line))
     },
   })
 
-  // Main window (hidden until we have something to show).
+  // Main window: the settings page.
   mainWindow = createMainWindow()
 
   buildMenu()
@@ -339,7 +399,6 @@ app.whenReady().then(() => {
     return
   }
 
-  navigateMain()
   diag('calling server.start()')
   server.start()
   diag('server.start() returned, state=', JSON.stringify(server.state))
@@ -380,6 +439,23 @@ function readBundleManifest() {
   return null
 }
 
+/**
+ * Version of the harness at a root: checkout layout (apps/cli/package.json)
+ * first, then deploy layout (package.json at the root).
+ */
+function readHarnessRootVersion(root) {
+  if (!root) return null
+  for (const rel of [path.join('apps', 'cli', 'package.json'), 'package.json']) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'))
+      if (typeof pkg.version === 'string' && pkg.version) return pkg.version
+    } catch {
+      /* keep probing */
+    }
+  }
+  return null
+}
+
 // ── IPC ──────────────────────────────────────────────────────────────────────
 
 function registerIpc() {
@@ -402,7 +478,8 @@ function registerIpc() {
   // URL is hardcoded in harness-update.js and never shown in the UI.
   ipcMain.handle('dsh:check-harness-update', async () => {
     const manifest = readBundleManifest()
-    const current = manifest ? manifest.harnessVersion : null
+    const root = server.state.harnessRoot || resolveHarnessPath(effectiveSettings().harnessPath)
+    const current = readHarnessRootVersion(root) || (manifest ? manifest.harnessVersion : null)
     try {
       const { latest, repoUrl } = await fetchOfficialHarnessVersion()
       const hasUpdate = current !== null && compareVersions(latest, current) > 0
@@ -411,20 +488,37 @@ function registerIpc() {
       return { ok: false, current, latest: null, hasUpdate: false, error: error.message }
     }
   })
-  ipcMain.handle('dsh:get-settings', () => {
-    const s = settingsStore
-    return {
-      harnessPath: s.get('harnessPath'),
-      dshHome: s.get('dshHome'),
-      port: s.get('port'),
-      workspace: s.get('workspace'),
-      autoRestart: s.get('autoRestart'),
+  // Direct kernel update: install the published version into the harness the
+  // app actually runs (deploy layout only — source checkouts are untouched).
+  ipcMain.handle('dsh:update-harness', async (_event, version) => {
+    const effective = effectiveSettings()
+    const targetPath = resolveHarnessPath(effective.harnessPath)
+    const target =
+      server.state.harnessRoot || (targetPath && isHarness(targetPath) ? targetPath : null)
+    if (!target) {
+      return { ok: false, error: '未找到可更新的 harness 目录。' }
+    }
+    if (fs.existsSync(path.join(target, 'apps', 'cli', 'lib', 'bin.js'))) {
+      return { ok: false, error: '当前 harness 是源码 checkout，无法直接更新；请改指向内置内核目录（安装目录\\resources\\harness）。' }
+    }
+    server.stop() // native modules lock files on Windows while the server runs
+    try {
+      const result = await installHarnessUpdate(String(version), target)
+      if (!result.ok) return result
+      pendingGuiOpen = true
+      server.start({ quiet: true })
+      return { ok: true, version: result.version, packageCount: result.packageCount }
+    } catch (error) {
+      server.start({ quiet: true }) // resume with the old kernel
+      return { ok: false, error: error.message }
     }
   })
+  ipcMain.handle('dsh:get-settings', () => effectiveSettings())
   ipcMain.handle('dsh:set-settings', (_event, partial) => {
     const changed = settingsStore.set(partial ?? {})
     if (changed) {
       // Apply immediately: settings affect the running server.
+      pendingGuiOpen = true
       server.start({ quiet: true })
       broadcastState()
     }
@@ -442,7 +536,10 @@ function registerIpc() {
     restartServer()
     return true
   })
-  ipcMain.on('dsh:open-settings', openSettingsWindow)
+  ipcMain.handle('dsh:open-gui', () => {
+    openGuiWindow()
+    return true
+  })
   ipcMain.handle('dsh:open-external', (_event, url) => {
     if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url)
     return true
@@ -498,23 +595,26 @@ function runSmoke() {
   async function check() {
     const state = server.state
     if (SMOKE_ERROR) {
-      // Error-path verification: the shell page must render the error card
-      // with working buttons (main-window preload regression guard).
+      // Error-path verification: the settings page must render the server
+      // error strip with working buttons (main-window preload regression guard).
       if (state.phase !== 'error') return
       try {
         const dom = await mainWindow.webContents.executeJavaScript(`(() => {
-          const error = document.getElementById('error')
-          const stopped = document.getElementById('stopped')
+          const error = document.getElementById('server-error')
           return {
             hasBridge: typeof window.dsh === 'object' && window.dsh !== null,
             errVisible: !!error && !error.classList.contains('hidden'),
-            errText: (document.getElementById('error-msg') || {}).textContent || '',
+            errText: (document.getElementById('server-error-text') || {}).textContent || '',
             retryExists: !!document.getElementById('retry'),
-            settingsExists: !!document.getElementById('settings'),
-            stoppedVisible: !!stopped && !stopped.classList.contains('hidden'),
+            saveExists: !!document.getElementById('save'),
+            openGuiHidden: (() => {
+              const openGui = document.getElementById('openGui')
+              return !openGui || openGui.classList.contains('hidden')
+            })(),
           }
         })()`)
-        const ok = dom.hasBridge && dom.errVisible && dom.retryExists && dom.settingsExists && !dom.stoppedVisible
+        const ok =
+          dom.hasBridge && dom.errVisible && dom.errText.length > 0 && dom.retryExists && dom.saveExists && dom.openGuiHidden
         finish(ok, ok
           ? `SMOKE_ERROR_OK phase=${state.phase} errText=${JSON.stringify(dom.errText)}`
           : `SMOKE_FAIL error page broken: ${JSON.stringify(dom)}`)
@@ -528,20 +628,24 @@ function runSmoke() {
       return
     }
     if (state.phase !== 'ready') return
-    // Provenance assertion: --smoke-bundled must run from the packaged harness.
-    if (SMOKE_BUNDLED && state.harnessSource !== 'bundled') {
-      finish(false, `SMOKE_FAIL harnessSource=${state.harnessSource} (expected 'bundled'), root=${state.harnessRoot}`)
-      return
+    // Provenance assertion: --smoke-bundled must run from the bundled harness
+    // (the default setting points at <install>/resources/harness, so the
+    // source may be 'setting' rather than 'bundled' — the root must match).
+    if (SMOKE_BUNDLED) {
+      const expected = path.join(process.resourcesPath, 'harness')
+      if (state.harnessRoot !== expected) {
+        finish(false, `SMOKE_FAIL harnessRoot=${state.harnessRoot} (expected ${expected})`)
+        return
+      }
     }
-    const wc = mainWindow.webContents
+    if (!guiWindow || guiWindow.isDestroyed()) openGuiWindow()
+    const wc = guiWindow.webContents
     if (!wc.isLoading() && wc.getURL().startsWith(state.url)) {
       finish(true, `SMOKE_OK ${state.url} harnessSource=${state.harnessSource}`)
     }
   }
   mainWindow.webContents.on('did-finish-load', check)
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
-    // ERR_ABORTED (-3): the shell page was replaced by our own navigation to
-    // the GUI URL once the server became ready — not a real failure.
     if (code === -3) return
     finish(false, `SMOKE_FAIL did-fail-load ${code} ${desc}`)
   })

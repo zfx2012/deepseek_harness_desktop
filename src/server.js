@@ -37,16 +37,25 @@ function harnessCandidates() {
   if (process.env.DSH_DESKTOP_HARNESS) {
     candidates.push({ path: process.env.DSH_DESKTOP_HARNESS, source: 'env' })
   }
-  // Common checkouts on this machine.
-  for (const base of ['F:\\Program Files (x86)\\deepseek-harness', 'C:\\deepseek-harness', 'D:\\deepseek-harness']) {
-    candidates.push({ path: base, source: 'detected' })
-  }
   candidates.push({ path: path.join(os.homedir(), 'deepseek-harness'), source: 'detected' })
   return candidates
 }
 
 /** Relative CLI bin locations, in preference order: checkout layout, deploy layout. */
 const RELATIVE_BINS = [path.join('apps', 'cli', 'lib', 'bin.js'), path.join('lib', 'bin.js')]
+
+/**
+ * Resolve a configured path against the app install directory. Relative
+ * values (e.g. "resources\harness") keep working when the app — especially
+ * the portable build — is moved to another directory.
+ * @param {string} p - the configured path (absolute or relative).
+ * @param {string} [installDir] - app install dir; relative values resolve
+ *   against it. When absent, relative paths pass through unchanged.
+ */
+function resolveInstallRelative(p, installDir) {
+  if (!p || path.isAbsolute(p)) return p
+  return path.join(installDir || '', p)
+}
 
 /**
  * Resolve the CLI bin inside a harness root. Two layouts are supported:
@@ -157,12 +166,15 @@ class ServerManager {
   /**
    * @param {object} deps
    * @param {import('./store').SettingsStore} deps.settings
+   * @param {object} [deps.defaults] - effective defaults used when a stored
+   *   setting is empty: { harnessPath, dshHome, port, installDir }.
    * @param {(state: object) => void} deps.onState
    * @param {(line: string) => void} deps.onLog
    * @param {string} deps.logFile - path of the server log file (appended).
    */
-  constructor({ settings, onState, onLog, logFile, spawnImpl, spawnSyncImpl }) {
+  constructor({ settings, defaults, onState, onLog, logFile, spawnImpl, spawnSyncImpl }) {
     this.settings = settings
+    this.defaults = { harnessPath: '', dshHome: '', port: 0, installDir: '', ...(defaults ?? {}) }
     this.onState = onState
     this.onLog = onLog
     this.logFile = logFile
@@ -210,7 +222,10 @@ class ServerManager {
    */
   start({ quiet = false } = {}) {
     this.stopChild()
-    const explicit = this.settings.get('harnessPath')
+    const explicit = resolveInstallRelative(
+      this.settings.get('harnessPath') || this.defaults.harnessPath || '',
+      this.defaults.installDir,
+    )
     let resolved
     if (explicit) {
       // An explicitly configured path must win or fail loudly — silently
@@ -240,14 +255,14 @@ class ServerManager {
       return
     }
 
-    const port = this.settings.get('port')
+    const port = this.settings.get('port') || this.defaults.port || 0
     const args = [bin, 'web']
     // Always pass an explicit port: the composed default is 3080, which
     // collides with any other dsh web instance. 0 = OS-assigned free port.
     args.push('--port', String(port > 0 ? port : 0))
 
-    const home = this.settings.get('dshHome') || undefined
-    const cwd = this.settings.get('workspace') || os.homedir()
+    const home = this.settings.get('dshHome') || this.defaults.dshHome || ''
+    const cwd = os.homedir()
     const env = { ...process.env }
     if (home) env.DSH_HOME = home
     env.DSH_DESKTOP = '1'
@@ -551,5 +566,6 @@ module.exports = {
   parseNodeVersion,
   satisfiesHarnessEngines,
   resolveNodeLaunch,
+  resolveInstallRelative,
   resetNodeLaunchCache,
 }

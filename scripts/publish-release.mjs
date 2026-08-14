@@ -59,26 +59,19 @@ function assets() {
 
 function bodyText() {
   if (!BODY_ARG) {
-    const manifest = (() => {
-      try {
-        return JSON.parse(readFileSync(path.join(ROOT, 'harness-deploy', 'manifest.json'), 'utf8'))
-      } catch {
-        return null
-      }
-    })()
     return [
       '## 安装包',
       '',
       '- `DeepSeek Harness Desktop-<ver>-x64.exe`：NSIS 安装包（可选安装目录）',
       '- `DeepSeek Harness Desktop-<ver>-portable-x64.exe`：便携版（免安装）',
       '',
-      `内置 Harness：${manifest?.harnessVersion ?? 'unknown'}（${manifest?.packageCount ?? '?'} 包，构建于 ${manifest?.builtAt ?? 'unknown'}）`,
+      '内置官方发布版 Harness 内核，安装即用（无需 Node，自动回退内置运行时）。',
       '',
       '## 功能',
       '',
       '- Windows 桌面外壳（Electron 43），自动拉起内置 `dsh web` 服务器',
-      '- 自包含：无需 Node / 无需外部 harness（自动回退内置运行时）',
-      '- 设置页：路径 / DSH_HOME / 端口 / 工作目录 / 内核更新检测',
+      '- 自包含：无需 Node / 无需外部 harness',
+      '- 设置页：harness 路径 / DSH_HOME / 端口 默认值预填，**内核更新检测 + 一键更新**',
       '- 崩溃自动重启、日志轮转、托盘常驻',
     ].join('\n')
   }

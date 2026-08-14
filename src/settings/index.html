@@ -12,6 +12,7 @@
       font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
       font-size: 13px; padding: 24px 28px 28px;
     }
+    .wrap { max-width: 760px; margin: 0 auto; }
     h1 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
     .field { margin-bottom: 16px; }
     label { display: block; font-weight: 600; margin-bottom: 6px; color: #aab1bf; }
@@ -27,7 +28,8 @@
       color: #d7dbe2; font-size: 12px; cursor: pointer; white-space: nowrap;
     }
     button.primary { background: #4f6ef7; color: #fff; }
-    button:hover { filter: brightness(1.15); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button:hover:not(:disabled) { filter: brightness(1.15); }
     .hint { font-size: 11px; color: #6f7887; margin-top: 5px; line-height: 1.5; }
     .check { display: flex; align-items: center; gap: 8px; }
     .check label { margin: 0; }
@@ -40,69 +42,90 @@
       font-size: 10.5px; color: #98a0b3; max-height: 140px; overflow: auto;
       white-space: pre-wrap; word-break: break-all;
     }
+    .hidden { display: none !important; }
+    /* server status strip */
+    .server-strip {
+      margin-bottom: 22px; padding: 12px 14px; border: 1px solid #232936;
+      border-radius: 10px; background: #12161e;
+    }
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #565e70; margin-right: 8px; flex: none; }
+    .dot.idle { background: #565e70; }
+    .dot.starting { background: #d9a13b; }
+    .dot.ready { background: #3f8f4f; }
+    .dot.error { background: #e06c6c; }
+    #server-phase { font-weight: 600; color: #c6cbd6; }
+    #server-url { color: #6fbf73; font-size: 11px; margin-top: 4px; word-break: break-all; }
+    #server-error { margin-top: 8px; color: #e06c6c; font-size: 12px; line-height: 1.5; }
   </style>
 </head>
 <body>
-  <h1>DeepSeek Harness 桌面端设置</h1>
+  <div class="wrap">
+    <h1>DeepSeek Harness 桌面端设置</h1>
 
-  <div class="field">
-    <label for="harnessPath">Harness 路径（dsh 源码/部署目录，包含 apps/cli/lib/bin.js）</label>
-    <div class="row">
-      <input type="text" id="harnessPath" placeholder="留空 = 自动检测（打包内置 / DSH_DESKTOP_HARNESS / 常见位置）" />
-      <button id="browseHarness">浏览…</button>
-      <button id="detectHarness">自动检测</button>
+    <div class="server-strip">
+      <div class="row" style="align-items: center;">
+        <span id="server-dot" class="dot idle"></span>
+        <span id="server-phase">正在加载…</span>
+        <span style="flex: 1;"></span>
+        <button id="openGui" class="primary hidden">打开 Web 界面</button>
+        <button id="retry" class="hidden">重试</button>
+      </div>
+      <div id="server-url" class="hidden"></div>
+      <div id="server-error" class="hidden"></div>
     </div>
-    <div class="hint">未打包运行时默认指向 F:\Program Files (x86)\deepseek-harness。</div>
-  </div>
 
-  <div class="field">
-    <label for="dshHome">DSH_HOME 数据目录（会话、设置、插件配置）</label>
-    <div class="row">
-      <input type="text" id="dshHome" placeholder="留空 = 默认 (~/.dsh)" />
-      <button id="browseHome">浏览…</button>
+    <div class="field">
+      <label for="harnessPath">Harness 路径（dsh 源码/部署目录，包含 apps/cli/lib/bin.js）</label>
+      <div class="row">
+        <input type="text" id="harnessPath" />
+        <button id="browseHarness">浏览…</button>
+        <button id="detectHarness">自动检测</button>
+      </div>
+      <div class="hint">默认 resources\harness，即安装目录下的内置内核（相对安装目录解析，移动应用目录后依然有效）。</div>
     </div>
-    <div class="hint">留空使用 harness 默认的 ~/.dsh；改为独立目录可与 CLI/网页版隔离数据。</div>
-  </div>
 
-  <div class="field">
-    <label for="port">监听端口（0 = 系统自动分配）</label>
-    <input type="number" id="port" min="0" max="65535" style="max-width: 140px;" />
-    <div class="hint">固定端口可能与其他实例冲突；0 会由系统挑选空闲端口。</div>
-  </div>
-
-  <div class="field">
-    <label for="workspace">服务器工作目录（会话 cwd）</label>
-    <div class="row">
-      <input type="text" id="workspace" placeholder="留空 = 用户主目录" />
-      <button id="browseWorkspace">浏览…</button>
+    <div class="field">
+      <label for="dshHome">DSH_HOME 数据目录（会话、设置、插件配置）</label>
+      <div class="row">
+        <input type="text" id="dshHome" />
+        <button id="browseHome">浏览…</button>
+      </div>
+      <div class="hint">默认 ~/.dsh（用户主目录下的 .dsh）。</div>
     </div>
-  </div>
 
-  <div class="field check">
-    <input type="checkbox" id="autoRestart" />
-    <label for="autoRestart">服务器意外退出时自动重启</label>
-  </div>
-
-  <div class="actions">
-    <button id="save" class="primary">保存并重启服务器</button>
-    <button id="reset">恢复默认</button>
-  </div>
-  <div id="status"></div>
-
-  <details style="margin-top: 14px;" open>
-    <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">关于 / 内置 Harness 信息</summary>
-    <pre class="log" id="about" style="max-height: 220px;"></pre>
-    <div class="row" style="margin-top: 8px;">
-      <button id="checkUpdate" class="primary">检测内核更新</button>
-      <button id="openOfficial" class="secondary" style="display: none;">前往官方仓库</button>
+    <div class="field">
+      <label for="port">监听端口</label>
+      <input type="number" id="port" min="1" max="65535" style="max-width: 140px;" />
+      <div class="hint">默认 3080（与 dsh 官方默认一致）；与其他实例冲突时请换一个端口。</div>
     </div>
-    <div id="updateStatus" style="margin-top: 8px; font-size: 12px; min-height: 16px; color: #8b93a3;"></div>
-  </details>
 
-  <details style="margin-top: 8px;">
-    <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">服务器日志（最近 40 行）</summary>
-    <pre class="log" id="log"></pre>
-  </details>
+    <div class="field check">
+      <input type="checkbox" id="autoRestart" />
+      <label for="autoRestart">服务器意外退出时自动重启</label>
+    </div>
+
+    <div class="actions">
+      <button id="save" class="primary">保存并重启服务器</button>
+      <button id="reset">恢复默认</button>
+    </div>
+    <div id="status"></div>
+
+    <details style="margin-top: 14px;" open>
+      <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">关于 / 内置 Harness 信息</summary>
+      <pre class="log" id="about" style="max-height: 220px;"></pre>
+      <div class="row" style="margin-top: 8px;">
+        <button id="checkUpdate" class="primary">检测内核更新</button>
+        <button id="updateNow" class="primary hidden">立即更新</button>
+        <button id="openOfficial" class="secondary hidden">前往官方仓库</button>
+      </div>
+      <div id="updateStatus" style="margin-top: 8px; font-size: 12px; min-height: 16px; color: #8b93a3;"></div>
+    </details>
+
+    <details style="margin-top: 8px;">
+      <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">服务器日志（最近 40 行）</summary>
+      <pre class="log" id="log"></pre>
+    </details>
+  </div>
 
   <script src="settings.js"></script>
 </body>

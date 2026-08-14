@@ -19,6 +19,7 @@ const {
   parseNodeVersion,
   satisfiesHarnessEngines,
   resolveNodeLaunch,
+  resolveInstallRelative,
   resetNodeLaunchCache,
 } = require('../src/server.js')
 
@@ -46,7 +47,7 @@ function makeManager(opts) {
   const harness = path.join(tmp, 'harness')
   makeFakeHarness(harness)
   const settings = {
-    get: (key) => ({ harnessPath: harness, dshHome: '', port: 0, workspace: '', autoRestart: true }[key]),
+    get: (key) => ({ harnessPath: harness, dshHome: '', port: 0, autoRestart: true }[key]),
   }
   const spawned = []
   const spawnImpl = (...args) => {
@@ -83,6 +84,14 @@ test('satisfiesHarnessEngines mirrors engines ^22.19.0 || >=24.0.0', () => {
   assert.equal(satisfiesHarnessEngines([24, 0, 0]), true)
   assert.equal(satisfiesHarnessEngines([24, 18, 0]), true)
   assert.equal(satisfiesHarnessEngines(null), false)
+})
+
+test('resolveInstallRelative keeps relative defaults portable across install dirs', () => {
+  assert.equal(resolveInstallRelative('', 'C:\\app'), '')
+  assert.equal(resolveInstallRelative('resources\\harness', 'C:\\app'), 'C:\\app\\resources\\harness')
+  assert.equal(resolveInstallRelative('resources\\harness', 'D:\\portable\\dsh-desktop'), 'D:\\portable\\dsh-desktop\\resources\\harness')
+  assert.equal(resolveInstallRelative('C:\\x\\y', 'C:\\app'), 'C:\\x\\y') // absolute passes through
+  assert.equal(resolveInstallRelative('harness-deploy'), 'harness-deploy') // no base: passthrough
 })
 
 test('resolveNodeLaunch uses system node only when engines are satisfied', () => {

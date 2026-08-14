@@ -44,7 +44,7 @@ const arg = (name) => {
   const i = args.indexOf(name)
   return i >= 0 ? args[i + 1] : undefined
 }
-const HARNESS = path.resolve(arg('--harness') ?? process.env.DSH_DESKTOP_HARNESS ?? 'F:\\Program Files (x86)\\deepseek-harness')
+const HARNESS = path.resolve(arg('--harness') ?? process.env.DSH_DESKTOP_HARNESS ?? '')
 const OUT = path.resolve(arg('--out') ?? path.join(ROOT, 'harness-deploy'))
 const FLATTEN = !args.includes('--no-flatten')
 

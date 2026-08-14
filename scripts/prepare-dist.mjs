@@ -3,26 +3,36 @@
 
 /**
  * Prepare the dist build: ensure harness-deploy/ exists for the afterPack
- * bundle copy. Harness resolution follows harness-resolve.mjs — a local
- * checkout wins; without one, the official repo is cloned and built
- * automatically (--no-auto-fetch disables the network step).
+ * bundle copy. The bundle is produced by bundle-harness.mjs — by default
+ * from the official npm channel (the latest published @deepseek-ai/dsh,
+ * deploy layout); --harness <checkout> switches to a checkout closure.
+ * --no-auto-fetch disables the network step (fails when a bundle is missing).
  *
  * Usage: node scripts/prepare-dist.mjs [--skip-bundle] [--no-auto-fetch]
+ *        [--harness <checkout>] [--version <ver>]
  */
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveHarness } from './harness-resolve.mjs'
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const OUT = path.join(ROOT, 'harness-deploy')
 
+/** Both supported layouts: checkout (apps/cli/lib/bin.js) and npm deploy (lib/bin.js). */
+const BIN_RELS = ['apps/cli/lib/bin.js', 'lib/bin.js']
+
+function hasBin() {
+  return BIN_RELS.some((rel) => existsSync(path.join(OUT, rel)))
+}
+
 /** Hard checks that the bundled harness is complete and self-contained. */
 function validateBundle() {
+  if (!hasBin()) {
+    throw new Error(`bundled harness is missing the CLI bin (${BIN_RELS.join(' / ')}) — rebuild with npm run bundle:harness`)
+  }
   const required = [
-    'apps/cli/lib/bin.js',
     'node_modules/@deepseek-ai/dsh-web-app',
     'node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html',
     'manifest.json',
@@ -54,23 +64,16 @@ function validateBundle() {
 if (process.argv.includes('--skip-bundle')) {
   mkdirSync(OUT, { recursive: true })
   console.log('harness-deploy: skipped bundling (empty dir created for afterPack)')
-} else if (existsSync(path.join(OUT, 'apps', 'cli', 'lib', 'bin.js'))) {
+} else if (hasBin()) {
   console.log('harness-deploy: already bundled')
   validateBundle()
 } else {
-  const { root, source } = resolveHarness({
-    cwd: ROOT,
-    explicit: undefined,
-    noAutoFetch: process.argv.includes('--no-auto-fetch'),
-  })
-  if (root) {
-    console.log(`harness-deploy: bundling from ${root} (source: ${source})`)
-    execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'bundle-harness.mjs'), '--harness', root], {
-      cwd: ROOT,
-      stdio: 'inherit',
-    })
-  } else {
-    mkdirSync(OUT, { recursive: true })
-    console.warn('harness-deploy: no harness checkout found; shipping without a bundled harness')
-  }
+  const bundleArgs = ['scripts/bundle-harness.mjs']
+  const harnessFlag = process.argv.indexOf('--harness')
+  if (harnessFlag >= 0) bundleArgs.push('--harness', process.argv[harnessFlag + 1])
+  const versionFlag = process.argv.indexOf('--version')
+  if (versionFlag >= 0) bundleArgs.push('--version', process.argv[versionFlag + 1])
+  if (process.argv.includes('--no-auto-fetch')) bundleArgs.push('--no-auto-fetch')
+  execFileSync(process.execPath, bundleArgs, { cwd: ROOT, stdio: 'inherit' })
+  validateBundle()
 }

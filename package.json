@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "description": "Desktop shell for the DeepSeek Harness Web GUI: spawns the dsh web server and hosts it in a native window.",
   "author": {
-    "name": "DeepSeek Harness Desktop Contributors",
-    "email": "deepseek-ai@example.com"
+    "name": "DeepSeek Harness Desktop Contributors"
   },
   "homepage": "https://github.com/zfx2012/deepseek_harness_desktop",
   "repository": {

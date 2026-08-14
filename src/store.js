@@ -9,14 +9,12 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const DEFAULTS = Object.freeze({
-  /** Absolute path to a dsh harness checkout; '' means auto-detect (bundled, env, known locations). */
+  /** Absolute path to a dsh harness; '' falls back to the effective default (bundled resources/harness). */
   harnessPath: '',
-  /** DSH_HOME for the spawned server; '' means the harness default (~/.dsh). */
+  /** DSH_HOME for the spawned server; '' falls back to the effective default (~/.dsh). */
   dshHome: '',
-  /** Listen port; 0 lets the OS pick a free port. */
+  /** Listen port; 0 falls back to the effective default (3080). */
   port: 0,
-  /** Working directory for the spawned server; '' means the user's home. */
-  workspace: '',
   /** Restart the server automatically if it exits unexpectedly. */
   autoRestart: true,
 })
