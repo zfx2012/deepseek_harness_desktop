@@ -39,7 +39,7 @@ function renderState(state) {
   serverError.textContent = isError ? (state.error || '未知错误') : ''
   const isReady = phase === 'ready'
   serverUrl.classList.toggle('hidden', !isReady)
-  serverUrl.textContent = isReady ? `GUI 地址：${state.url}` : ''
+  serverUrl.textContent = isReady ? `主界面地址：${state.url}` : ''
   retryBtn.classList.toggle('hidden', !isError)
   // "Back" is only meaningful when the Web GUI is actually up.
   backToGuiBtn.classList.toggle('hidden', !isReady)
@@ -75,7 +75,7 @@ async function save() {
     return
   }
   const changed = await window.dsh.setSettings(readForm())
-  setStatus(changed ? '已保存，服务器已重启。' : '设置未变化。', 'ok')
+  setStatus(changed ? '已保存，正在返回主界面…' : '设置未变化。', 'ok')
 }
 
 $('save').addEventListener('click', save)

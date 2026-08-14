@@ -5,26 +5,28 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
   <title>设置 — DeepSeek Harness Desktop</title>
   <style>
+    /* Light theme, matching the dsh Web GUI (--dsw-alias-bg-base #f9fafb). */
     :root {
-      color-scheme: dark;
-      --bg: #0d0f14;
-      --bg-card: #131722;
-      --bg-input: #0f141d;
-      --border: #232b3a;
-      --border-strong: #2e3950;
-      --text: #dfe4ee;
-      --text-dim: #8a94a7;
-      --text-faint: #5c6677;
+      color-scheme: light;
+      --bg: #f9fafb;
+      --bg-card: #ffffff;
+      --bg-input: #f9fafb;
+      --border: #e5e7eb;
+      --border-strong: #d1d5db;
+      --text: #111827;
+      --text-dim: #6b7280;
+      --text-faint: #9ca3af;
       --accent: #4f6ef7;
       --accent-2: #8a5cf6;
-      --ok: #4cc38a;
-      --warn: #e5a23c;
-      --err: #e5656b;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --err: #dc2626;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-thumb { background: #28303f; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #35405a; }
+    ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
     ::-webkit-scrollbar-track { background: transparent; }
     body {
       background: var(--bg); color: var(--text);
@@ -41,7 +43,7 @@
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
       display: flex; align-items: center; justify-content: center;
       font-weight: 700; font-size: 17px; color: #fff; letter-spacing: 0.5px;
-      box-shadow: 0 4px 16px rgba(79, 110, 247, 0.35);
+      box-shadow: 0 4px 16px rgba(79, 110, 247, 0.3);
     }
     .header h1 { font-size: 17px; font-weight: 650; letter-spacing: 0.2px; }
     .header .sub { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
@@ -50,6 +52,7 @@
     .card {
       background: var(--bg-card); border: 1px solid var(--border);
       border-radius: 14px; padding: 18px 20px; margin-bottom: 16px;
+      box-shadow: var(--shadow);
     }
     .card-title {
       display: flex; align-items: center; gap: 8px;
@@ -64,9 +67,10 @@
     /* ── server status strip ────────────────────────────────── */
     .server-strip {
       display: flex; flex-direction: column; gap: 8px;
-      background: linear-gradient(180deg, rgba(79, 110, 247, 0.07), transparent), var(--bg-card);
+      background: linear-gradient(180deg, rgba(79, 110, 247, 0.06), transparent), var(--bg-card);
       border: 1px solid var(--border); border-radius: 14px;
       padding: 14px 18px; margin-bottom: 16px;
+      box-shadow: var(--shadow);
     }
     .strip-row { display: flex; align-items: center; gap: 10px; }
     .dot {
@@ -75,7 +79,7 @@
     }
     .dot.idle { background: var(--text-faint); }
     .dot.starting { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
-    .dot.ready { background: var(--ok); box-shadow: 0 0 8px rgba(76, 195, 138, 0.7); }
+    .dot.ready { background: var(--ok); box-shadow: 0 0 8px rgba(22, 163, 74, 0.55); }
     .dot.error { background: var(--err); }
     @keyframes pulse {
       0%, 100% { opacity: 1; }
@@ -84,13 +88,13 @@
     #server-phase { font-weight: 650; color: var(--text); font-size: 13px; }
     #server-url {
       color: var(--ok); font-size: 11.5px; word-break: break-all;
-      padding: 6px 10px; border-radius: 8px; background: rgba(76, 195, 138, 0.08);
-      border: 1px solid rgba(76, 195, 138, 0.2);
+      padding: 6px 10px; border-radius: 8px; background: rgba(22, 163, 74, 0.08);
+      border: 1px solid rgba(22, 163, 74, 0.25);
     }
     #server-error {
       color: var(--err); font-size: 12px; line-height: 1.6;
-      padding: 8px 10px; border-radius: 8px; background: rgba(229, 101, 107, 0.08);
-      border: 1px solid rgba(229, 101, 107, 0.22);
+      padding: 8px 10px; border-radius: 8px; background: rgba(220, 38, 38, 0.06);
+      border: 1px solid rgba(220, 38, 38, 0.25);
     }
 
     /* ── form fields ────────────────────────────────────────── */
@@ -107,7 +111,7 @@
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     input:hover { border-color: var(--border-strong); }
-    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.18); }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.15); }
     input::placeholder { color: var(--text-faint); }
     input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
     .hint { font-size: 11px; color: var(--text-faint); margin-top: 6px; line-height: 1.55; }
@@ -117,19 +121,19 @@
     /* ── buttons ────────────────────────────────────────────── */
     button {
       padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 9px;
-      background: #1b2130; color: var(--text); font-size: 12px; cursor: pointer;
+      background: #ffffff; color: var(--text); font-size: 12px; cursor: pointer;
       white-space: nowrap; transition: all 0.15s ease; font-family: inherit;
     }
-    button:hover:not(:disabled) { border-color: #3d4a68; background: #232b3d; }
+    button:hover:not(:disabled) { border-color: #9ca3af; background: #f3f4f6; }
     button:active:not(:disabled) { transform: translateY(1px); }
     button:disabled { opacity: 0.45; cursor: default; }
     button.primary {
       border: 0; background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      color: #fff; font-weight: 600; box-shadow: 0 2px 10px rgba(79, 110, 247, 0.3);
+      color: #fff; font-weight: 600; box-shadow: 0 2px 10px rgba(79, 110, 247, 0.28);
     }
-    button.primary:hover:not(:disabled) { filter: brightness(1.1); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    button.primary:hover:not(:disabled) { filter: brightness(1.08); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
     button.ghost { border-color: transparent; background: transparent; color: var(--text-dim); }
-    button.ghost:hover:not(:disabled) { color: var(--text); background: #1b2130; border-color: var(--border); }
+    button.ghost:hover:not(:disabled) { color: var(--text); background: #f3f4f6; border-color: var(--border); }
 
     /* ── status / actions ───────────────────────────────────── */
     .actions { display: flex; gap: 10px; margin-top: 18px; }
@@ -175,7 +179,7 @@
         <h1>DeepSeek Harness 桌面端</h1>
         <div class="sub">设置 · 状态 · 内核更新</div>
       </div>
-      <button id="backToGui" class="primary hidden">← 返回 Web 界面</button>
+      <button id="backToGui" class="primary hidden">← 返回主界面</button>
     </div>
 
     <div class="server-strip">
