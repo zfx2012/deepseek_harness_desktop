@@ -86,8 +86,11 @@ Invoke-Step 'package (dir)' { npx electron-builder --win dir }
 
 # 4. bundled smoke — MUST come from resources/harness
 $smokeHome = Join-Path $root '.verify-smoke-home'
-$dshHome = ($smokeHome -replace '\\', '\\')
-$config = '{"harnessPath":"","dshHome":"' + $dshHome + '\dsh-home","port":0,"autoRestart":true}'
+# JSON-escape the whole path: the '\\dsh-home' suffix must be doubled too,
+# otherwise '\d' is an invalid JSON escape and SettingsStore silently falls
+# back to defaults (the smoke would then touch the real ~/.dsh).
+$dshHome = (($smokeHome + '\dsh-home') -replace '\\', '\\')
+$config = '{"harnessPath":"","dshHome":"' + $dshHome + '","port":0,"autoRestart":true}'
 Invoke-Step 'bundled smoke' {
   Run-Smoke -Label 'bundled' -SmokeArgs @('--smoke-bundled', '--disable-gpu') -ConfigJson $config -UserData $smokeHome
 }

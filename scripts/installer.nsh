@@ -120,10 +120,14 @@ Var /GLOBAL pid
   ${endIf}
 !macroend
 
-; Default install location: C:\Program Files\DeepSeekHarnessDesktop\ when no
-; previous install was remembered and no /D= override was given. initMultiUser
-; already restored a remembered location (HKLM per-machine / HKCU per-user), so
-; only fill in the default when neither registry key has one.
+; Default install location: C:\Program Files\<APP_FILENAME> when no previous
+; install was remembered and no /D= override was given. The default MUST end
+; with ${APP_FILENAME} (the product name): assistedInstaller.nsh's instFilesPre
+; appends a "${APP_FILENAME}" sub-folder to any $INSTDIR that does not contain
+; it, so a custom name like "DeepSeekHarnessDesktop" (no spaces) would end up
+; as C:\Program Files\DeepSeekHarnessDesktop\DeepSeek Harness Desktop.
+; initMultiUser already restored a remembered location (HKLM per-machine /
+; HKCU per-user), so only fill in the default when neither registry key has one.
 !macro customInit
   !insertmacro GetDParameter $R2
   ${if} $R2 == ""
@@ -131,7 +135,7 @@ Var /GLOBAL pid
     ReadRegStr $R1 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
     ${if} $R0 == ""
     ${andif} $R1 == ""
-      StrCpy $INSTDIR "$PROGRAMFILES64\DeepSeekHarnessDesktop"
+      StrCpy $INSTDIR "$PROGRAMFILES64\${APP_FILENAME}"
     ${endif}
   ${endif}
 !macroend

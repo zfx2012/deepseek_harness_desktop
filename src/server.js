@@ -267,7 +267,7 @@ class ServerManager {
     env.DSH_DESKTOP = '1'
     // Fresh DSH_HOME + symlink-less Windows: pre-heal the profile fallback so
     // the child never needs the SeCreateSymbolicLinkPrivilege.
-    this.preHealProfiles(home ?? path.join(os.homedir(), '.dsh'), this.harnessRoot)
+    this.preHealProfiles(home || path.join(os.homedir(), '.dsh'), this.harnessRoot)
 
     const launch = resolveNodeLaunch()
     this.log(`启动: ${launch.command} ${[...launch.args, ...args].join(' ')}  (cwd: ${cwd}${home ? `, DSH_HOME: ${home}` : ''})`)
@@ -451,12 +451,13 @@ class ServerManager {
         return
       }
       let chunk
+      let bytesRead = 0
       try {
         const fd = fs.openSync(this.logFile, 'r')
         try {
           const length = Math.min(stat.size - this.filePos, 65536)
           const buf = Buffer.alloc(length)
-          fs.readSync(fd, buf, 0, length, this.filePos)
+          bytesRead = fs.readSync(fd, buf, 0, length, this.filePos)
           chunk = buf.toString('utf8')
         } finally {
           fs.closeSync(fd)
@@ -464,8 +465,11 @@ class ServerManager {
       } catch {
         return
       }
-      this.filePos += chunk.length
-      if (chunk.length === 0) return
+      // Advance the file position by BYTES, not characters: chunk.length is a
+      // UTF-16 code-unit count, so multi-byte (CJK) log content would make the
+      // poller re-read the tail of every chunk (duplicated/garbled lines).
+      this.filePos += bytesRead
+      if (bytesRead === 0) return
       this.log(chunk)
       // Readiness matches only while booting; after ready the poller keeps
       // forwarding new log lines to the settings window.

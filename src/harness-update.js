@@ -135,7 +135,9 @@ function mergeDir(src, dst, exclude = new Set()) {
  */
 async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl, log = () => {}, fresh = false } = {}) {
   const ver = String(version ?? '').trim()
-  if (!/^\d+\.\d+\.\d+/.test(ver)) throw new Error(`无效的版本号: ${ver}`)
+  // Anchored semver-ish: x.y.z with an optional -prerelease suffix. Anything
+  // else must never reach `npm install <pkg>@<ver>`.
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(ver)) throw new Error(`无效的版本号: ${ver}`)
   if (!fresh) {
     const bin = path.join(targetRoot, 'lib', 'bin.js')
     if (!fs.existsSync(bin)) throw new Error(`目标目录不是 deploy 布局（缺少 lib/bin.js），无法直接更新：${targetRoot}`)
@@ -146,10 +148,14 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
   const run = spawnImpl ?? spawnSync
   const npmCmd = npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
   // Some sandboxed/CI environments refuse to spawn .cmd shims directly
-  // (EINVAL); retry through cmd.exe /c when that happens.
+  // (EINVAL/ENOENT); retry through cmd.exe /c only for those spawn-level
+  // failures. Other failures (timeouts, non-zero exits) must surface as-is —
+  // retrying would double-run a 3-minute install.
   const runNpm = (args, opts) => {
     const direct = run(npmCmd, args, opts)
     if (direct && (direct.status !== null || !direct.error)) return direct
+    const code = direct && direct.error ? direct.error.code : undefined
+    if (code !== 'EINVAL' && code !== 'ENOENT') return direct
     // cmd.exe /c needs the command itself as the first token (npm, not the
     // first argument); quote arguments that contain whitespace.
     const quoted = args.map((a) => (/[ \t"]/.test(a) ? `"${a}"` : a))

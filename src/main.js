@@ -517,7 +517,14 @@ function registerIpc() {
       return { ok: true, version: result.version, packageCount: result.packageCount }
     } catch (error) {
       server.start({ quiet: true }) // resume with the old kernel
-      return { ok: false, error: error.message }
+      const msg = error.message
+      if (/EPERM|EACCES|permission denied/i.test(msg)) {
+        return {
+          ok: false,
+          error: `${msg}。安装目录无写权限（每机器安装在 C:\\Program Files 下）——请以管理员身份运行应用后再更新，或在设置中把 harness 路径指向可写目录。`,
+        }
+      }
+      return { ok: false, error: msg }
     }
   })
   ipcMain.handle('dsh:get-settings', () => effectiveSettings())
@@ -611,7 +618,7 @@ function runSmoke() {
           return {
             hasBridge: typeof window.dsh === 'object' && window.dsh !== null,
             errVisible: !!error && !error.classList.contains('hidden'),
-            errText: (document.getElementById('server-error-text') || {}).textContent || '',
+            errText: (document.getElementById('server-error') || {}).textContent || '',
             retryExists: !!document.getElementById('retry'),
             saveExists: !!document.getElementById('save'),
             openGuiHidden: (() => {

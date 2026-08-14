@@ -6,6 +6,7 @@ directories:
 files:
   - src/**
   - assets/icon.png
+  - assets/icon.ico
   - package.json
 # The bundled harness is copied by scripts/after-pack.cjs, NOT via
 # extraResources: electron-builder's copy filter silently drops any top-level

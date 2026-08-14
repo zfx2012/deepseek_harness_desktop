@@ -174,7 +174,11 @@ test('installHarnessUpdate falls back to cmd.exe when .cmd spawn is blocked', as
   const calls = []
   const spawnImpl = (cmd, args, opts) => {
     calls.push([cmd, args])
-    if (cmd === 'npm.cmd') return { status: null, error: new Error('spawnSync npm.cmd EINVAL') }
+    if (cmd === 'npm.cmd') {
+      const err = new Error('spawnSync npm.cmd EINVAL')
+      err.code = 'EINVAL'
+      return { status: null, error: err }
+    }
     // cmd.exe /c fallback: materialize the stage tree like the real npm would.
     const stage = opts.cwd
     const pkg = path.join(stage, 'node_modules', '@deepseek-ai', 'dsh')
