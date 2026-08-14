@@ -65,7 +65,7 @@ npm run dist:dir         # 仅产出 win-unpacked/（打包版冒烟用）
 **harness 来源解析**（`scripts/harness-resolve.mjs`，bundle 与 prepare 共用）：
 1. `--harness <已构建的checkout>` 显式指定
 2. 环境变量 `DSH_DESKTOP_HARNESS`
-3. 常见本地路径（`F:\Program Files (x86)\deepseek-harness`、`C:\`、`D:\`、`~/deepseek-harness`）
+3. 常见本地路径（`C:\Program Files (x86)\deepseek-harness`、`D:\`、`~/deepseek-harness`）
 4. **自动获取**：浅克隆官方仓库 `https://github.com/deepseek-ai/deepseek-harness.git` 到
    `.harness-checkout/`，并自动执行 `pnpm install --frozen-lockfile` + `pnpm run build`
    （缓存复用；`--update` 重新拉取构建；`--no-auto-fetch` 关闭联网，离线打包）。
@@ -97,6 +97,20 @@ npm run dist:dir         # 仅产出 win-unpacked/（打包版冒烟用）
 2. 部署时把 `release/` 下的安装包、`latest.yml`（electron-builder 自动生成）上传到该地址。
 3. 用户侧设置环境变量 `DSH_DESKTOP_UPDATE_URL=<同一地址>` 后，应用启动时静默检查更新，
    菜单"帮助 → 检查更新…"可手动检查并下载安装。未配置该变量时应用完全不联网检查更新。
+
+## 发布 Release
+
+```bash
+npm run dist                              # 本地打包（release/ 产出安装包 + latest.yml + blockmap）
+git tag -a v0.1.0 -m "release notes"      # 打版本 tag
+git push origin v0.1.0                    # 推送 tag
+node scripts/publish-release.mjs --tag v0.1.0            # 创建 Release 并上传全部资产
+node scripts/publish-release.mjs --tag v0.1.0 --upload-only   # Release 已存在时仅补传资产
+```
+
+发布脚本复用 git 凭据管理器里缓存的 GitHub token（与 push 同一凭据，无需额外配置）；
+自动跳过已存在的资产。`latest.yml` 随 Release 发布——它是桌面端壳更新通道
+（`DSH_DESKTOP_UPDATE_URL`）需要的更新清单。
 
 ## 服务器细节
 
