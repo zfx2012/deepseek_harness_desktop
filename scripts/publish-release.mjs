@@ -136,50 +136,66 @@ function sameAsset(name, target) {
   return name === target || name === target.replace(/ /g, '.')
 }
 
-/**
- * --force per-asset replacement: delete the OLD asset of the same name right
- * before uploading its replacement, so a failure only ever affects that one
- * asset (never wipes the whole release before any upload succeeds).
- */
-async function deleteMatchingAssets(releaseId, file, token) {
-  const name = path.basename(file)
-  const existing = await releaseAssets(releaseId, token)
-  for (const asset of existing) {
-    if (sameAsset(asset.name, name)) {
-      console.log(`Deleting existing asset ${asset.name}…`)
-      await requireOk(await apiJson(`${API}/releases/assets/${asset.id}`, { method: 'DELETE' }, token))
-    }
-  }
+async function deleteAsset(assetId, token) {
+  await requireOk(await apiJson(`${API}/releases/assets/${assetId}`, { method: 'DELETE' }, token))
 }
 
-/** Poll the release assets until `name` shows up (GitHub lands uploads async). */
-async function waitForAsset(releaseId, name, token, tries = 6) {
+async function renameAsset(assetId, newName, token) {
+  await requireOk(
+    await apiJson(`${API}/releases/assets/${assetId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    }, token),
+  )
+}
+
+/**
+ * Poll the release assets until an asset whose name EXACTLY equals `name`
+ * shows up. Exact (not variant) matching is deliberate: after a --force
+ * delete, GitHub's asset list can briefly still show the deleted asset under
+ * its dot-variant name — a variant match would mistake that stale entry for
+ * a landed upload.
+ */
+async function waitForAsset(releaseId, name, token, tries = 8) {
   for (let i = 0; i < tries; i++) {
     await new Promise((resolve) => setTimeout(resolve, 10000))
     const existing = await releaseAssets(releaseId, token)
-    if (existing.some((a) => sameAsset(a.name, name))) return true
+    if (existing.some((a) => a.name === name)) return true
   }
   return false
 }
 
-async function uploadAsset(release, file, token) {
+async function uploadAsset(release, file, token, force) {
   const name = path.basename(file)
   const data = readFileSync(file)
+  // --force: upload under a unique temp name first, then atomically replace —
+  // delete the old asset and rename only AFTER the new one has landed. A
+  // failed upload leaves the old asset untouched.
+  const uploadName = force ? `${name}.uploading` : name
+  if (force) {
+    for (const asset of await releaseAssets(release.id, token)) {
+      if (asset.name === uploadName) {
+        console.log(`Deleting stale upload remnant ${uploadName}…`)
+        await deleteAsset(asset.id, token)
+      }
+    }
+  }
   for (let attempt = 1; attempt <= 3; attempt++) {
-    console.log(`Uploading ${name} (${(data.length / 1024 / 1024).toFixed(1)} MB)${attempt > 1 ? `, attempt ${attempt}` : ''}…`)
+    console.log(`Uploading ${force ? `${name} (as ${uploadName})` : name} (${(data.length / 1024 / 1024).toFixed(1)} MB)${attempt > 1 ? `, attempt ${attempt}` : ''}…`)
     let upload
     try {
       upload = await apiJson(
-        `https://uploads.github.com/repos/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`,
+        `https://uploads.github.com/repos/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(uploadName)}`,
         { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: data },
         token,
       )
     } catch (error) {
       // The connection may drop AFTER GitHub accepted the upload — poll the
       // asset list before retrying (GitHub lands large uploads asynchronously).
-      if (await waitForAsset(release.id, name, token)) {
+      if (await waitForAsset(release.id, uploadName, token)) {
         console.log(`  -> received by GitHub (${error.cause?.code ?? error.message})`)
-        return
+        break
       }
       if (attempt === 3) throw error
       console.log(`  -> ${error.cause?.code ?? error.message}, not landed yet, retrying…`)
@@ -190,18 +206,30 @@ async function uploadAsset(release, file, token) {
       console.log(`  -> already present, skipped`)
       return
     }
-    const okRes = await requireOk(upload)
-    const asset = await okRes.json()
-    console.log(`  -> ${asset.browser_download_url}`)
-    return
+    if (upload.ok) {
+      const asset = await upload.json()
+      console.log(`  -> ${asset.browser_download_url}`)
+      break
+    }
+    throw new Error(`upload ${uploadName} failed: HTTP ${upload.status}`)
+  }
+  if (force) {
+    // The new asset is landed under the temp name — now replace the old one.
+    const landed = (await releaseAssets(release.id, token)).find((a) => a.name === uploadName)
+    if (!landed) throw new Error(`${uploadName} did not land on GitHub`)
+    for (const asset of await releaseAssets(release.id, token)) {
+      if (sameAsset(asset.name, name)) {
+        console.log(`Deleting old asset ${asset.name}…`)
+        await deleteAsset(asset.id, token)
+      }
+    }
+    console.log(`Renaming ${uploadName} -> ${name}…`)
+    await renameAsset(landed.id, name, token)
   }
 }
 
 for (const file of assets()) {
-  if (FORCE) {
-    await deleteMatchingAssets(release.id, file, token)
-  }
-  await uploadAsset(release, file, token)
+  await uploadAsset(release, file, token, FORCE)
 }
 
 console.log('Done.')
