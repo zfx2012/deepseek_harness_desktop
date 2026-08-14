@@ -20,6 +20,7 @@ const serverPhase = $('server-phase')
 const serverUrl = $('server-url')
 const serverError = $('server-error')
 const retryBtn = $('retry')
+const backToGuiBtn = $('backToGui')
 
 const PHASE_TEXT = {
   idle: '服务器已停止',
@@ -38,8 +39,10 @@ function renderState(state) {
   serverError.textContent = isError ? (state.error || '未知错误') : ''
   const isReady = phase === 'ready'
   serverUrl.classList.toggle('hidden', !isReady)
-  serverUrl.textContent = isReady ? `GUI 地址：${state.url}（保存设置或重启后自动打开，也可从托盘图标打开）` : ''
+  serverUrl.textContent = isReady ? `GUI 地址：${state.url}` : ''
   retryBtn.classList.toggle('hidden', !isError)
+  // "Back" is only meaningful when the Web GUI is actually up.
+  backToGuiBtn.classList.toggle('hidden', !isReady)
 }
 
 function setStatus(text, kind) {
@@ -110,6 +113,7 @@ $('detectHarness').addEventListener('click', async () => {
 })
 
 retryBtn.addEventListener('click', () => window.dsh.restartServer())
+backToGuiBtn.addEventListener('click', () => window.dsh.backToGui())
 
 window.dsh.getState().then(renderState)
 window.dsh.onState(renderState)

@@ -39,5 +39,6 @@ contextBridge.exposeInMainWorld('dsh', {
 
   // control
   restartServer: () => ipcRenderer.invoke('dsh:restart-server'),
+  backToGui: () => ipcRenderer.invoke('dsh:back-to-gui'),
   openExternal: (url) => ipcRenderer.invoke('dsh:open-external', url),
 })

@@ -82,11 +82,9 @@ if (process.env.DSH_DESKTOP_USERDATA) {
 let settingsStore
 let server
 let mainWindow = null
-let guiWindow = null
+let settingsWindow = null
 let tray = null
 let isQuitting = false
-/** Open the GUI window automatically once the server becomes ready. */
-let pendingGuiOpen = false
 
 // ── single instance ──────────────────────────────────────────────────────────
 
@@ -108,7 +106,7 @@ function sendToWindow(win, channel, payload) {
 
 function broadcastState() {
   const state = server.state
-  sendToWindow(mainWindow, 'dsh:state', state)
+  sendToWindow(settingsWindow, 'dsh:state', state)
 }
 
 /**
@@ -129,7 +127,11 @@ function isAllowedLocalUrl(raw) {
   )
 }
 
-/** The main window is the settings page: it never navigates away. */
+/**
+ * The main window hosts the dsh Web GUI — the app opens straight into it.
+ * It gets NO preload bridge (least privilege: the Web UI is not trusted).
+ * The settings page lives in a separate on-demand window.
+ */
 function createMainWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -140,7 +142,6 @@ function createMainWindow() {
     title: 'DeepSeek Harness Desktop',
     backgroundColor: '#0f1115',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -162,66 +163,78 @@ function createMainWindow() {
     event.preventDefault()
     if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
   })
-  win.loadFile(path.join(__dirname, 'settings', 'index.html'))
   return win
 }
 
-/** Show (or create) the window hosting the dsh web GUI. */
-function openGuiWindow() {
-  const url = server.state.url
-  if (!url) return
-  if (guiWindow && !guiWindow.isDestroyed()) {
-    if (guiWindow.webContents.getURL() !== url) guiWindow.loadURL(url)
-    guiWindow.show()
-    guiWindow.focus()
+/** Show (or recreate) the main GUI window. */
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+  mainWindow = createMainWindow()
+  const { phase, url } = server.state
+  if (phase === 'ready' && url) mainWindow.loadURL(url)
+  else mainWindow.show() // blank until ready; onState will navigate it
+}
+
+/** Open (or focus) the settings window — on demand, with a back button. */
+function openSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show()
+    settingsWindow.focus()
     return
   }
   const win = new BrowserWindow({
-    width: 1280,
+    width: 880,
     height: 860,
-    minWidth: 900,
+    minWidth: 760,
     minHeight: 600,
     show: false,
-    title: 'DeepSeek Harness',
-    backgroundColor: '#0f1115',
+    title: '设置 — DeepSeek Harness Desktop',
+    backgroundColor: '#0d0f14',
     webPreferences: {
-      // Least privilege: the GUI window hosts the dsh web UI and gets NO
-      // preload bridge at all. Only the trusted settings page (main window)
-      // receives the control API — an XSS in the web UI cannot reach
-      // updateHarness/restartServer.
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   })
-  guiWindow = win
+  settingsWindow = win
   win.on('ready-to-show', () => {
     win.show()
   })
   win.on('closed', () => {
-    if (guiWindow === win) guiWindow = null
+    if (settingsWindow === win) settingsWindow = null
   })
-  win.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (target.startsWith('http://') || target.startsWith('https://')) shell.openExternal(target)
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
     return { action: 'deny' }
   })
-  win.webContents.on('will-navigate', (event, target) => {
-    if (isAllowedLocalUrl(target)) return
-    event.preventDefault()
-    if (target.startsWith('http://') || target.startsWith('https://')) shell.openExternal(target)
-  })
-  win.loadURL(url)
+  win.loadFile(path.join(__dirname, 'settings', 'index.html'))
 }
 
-/** Keep the GUI window in step with the server: reload on new URL, close on stop. */
-function syncGuiWindow() {
+/** Close the settings window and return to the Web GUI. */
+function backToGui() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close()
+  showMainWindow()
+}
+
+/** Keep the main GUI window in step with the server. */
+function syncMainWindow() {
   const { phase, url } = server.state
-  if (!guiWindow || guiWindow.isDestroyed()) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
   if (phase === 'ready' && url) {
-    if (guiWindow.webContents.getURL() !== url) guiWindow.loadURL(url)
-  } else {
-    guiWindow.destroy()
+    if (mainWindow.webContents.getURL() !== url) mainWindow.loadURL(url)
+    mainWindow.show()
+  } else if (phase === 'error') {
+    // The GUI cannot load — surface the settings page so the user can fix it.
+    mainWindow.hide()
+    openSettingsWindow()
   }
+  // idle/starting: leave the window as-is (the web UI shows its own state).
 }
 
 function buildMenu() {
@@ -251,10 +264,10 @@ function buildMenu() {
   }
   const template = [
     {
-      // The main window IS the settings page — the menu says so directly.
+      // Settings live in an on-demand window; the main window is the Web GUI.
       label: '设置',
       submenu: [
-        { label: '显示设置页', accelerator: 'CmdOrCtrl+,', click: () => showMainWindow() },
+        { label: '打开设置', accelerator: 'CmdOrCtrl+,', click: () => openSettingsWindow() },
         { type: 'separator' },
         { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
@@ -262,8 +275,7 @@ function buildMenu() {
     {
       label: '服务器',
       submenu: [
-        // No "open GUI" item here: the GUI opens automatically after a
-        // restart/save (pendingGuiOpen), or via the tray icon menu.
+        // The main window IS the GUI — it loads automatically on ready.
         { label: '重启服务器', accelerator: 'CmdOrCtrl+R', click: () => restartServer() },
         { label: '停止服务器', click: () => server.stop() },
         { type: 'separator' },
@@ -363,8 +375,8 @@ function createTray() {
   tray = new Tray(icon)
   tray.setToolTip('DeepSeek Harness Desktop')
   const menu = Menu.buildFromTemplate([
-    { label: '显示主窗口（设置）', click: () => showMainWindow() },
-    { label: '打开 Web 界面', click: () => openGuiWindow() },
+    { label: '显示 Web 界面', click: () => showMainWindow() },
+    { label: '设置…', click: () => openSettingsWindow() },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() },
   ])
@@ -372,20 +384,7 @@ function createTray() {
   tray.on('double-click', showMainWindow)
 }
 
-function showMainWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-    return
-  }
-  // Window was closed: recreate it (tray-only mode must stay recoverable).
-  mainWindow = createMainWindow()
-  mainWindow.show()
-}
-
 function restartServer() {
-  pendingGuiOpen = true // reopen the GUI once the new boot is ready
   server.start({ quiet: true })
 }
 
@@ -407,18 +406,14 @@ app.whenReady().then(() => {
     logFile: path.join(app.getPath('userData'), 'server.log'),
     onState: () => {
       broadcastState()
-      syncGuiWindow()
-      if (pendingGuiOpen && server.state.phase === 'ready') {
-        pendingGuiOpen = false
-        openGuiWindow()
-      }
+      syncMainWindow()
     },
     onLog: (line) => {
-      sendToWindow(mainWindow, 'dsh:log', String(line))
+      sendToWindow(settingsWindow, 'dsh:log', String(line))
     },
   })
 
-  // Main window: the settings page.
+  // Main window: the Web GUI (opens straight into it once the server is up).
   mainWindow = createMainWindow()
 
   buildMenu()
@@ -633,7 +628,7 @@ function registerIpc() {
     server.stop() // native modules lock files on Windows while the server runs
     try {
       const outcome = await runHarnessUpdateInChild(ver, installTarget, fresh, (text) => {
-        sendToWindow(mainWindow, 'dsh:update-progress', String(text))
+        sendToWindow(settingsWindow, 'dsh:update-progress', String(text))
       })
       if (!outcome.ok) throw new Error(outcome.error || '更新失败（未知错误）')
       const result = outcome.result
@@ -641,13 +636,10 @@ function registerIpc() {
         // Persist the per-user copy so the next boot (and next update) uses it.
         settingsStore.set({ harnessPath: installTarget })
       }
-      pendingGuiOpen = true
       server.start({ quiet: true })
       return { ok: true, version: result.version, packageCount: result.packageCount, harnessPath: installTarget, switched }
     } catch (error) {
-      // Resume with the old kernel AND reopen the GUI once ready — the update
-      // failure should not leave the user staring at a stopped server.
-      pendingGuiOpen = true
+      // Resume with the old kernel; the GUI reloads automatically on ready.
       server.start({ quiet: true })
       return { ok: false, error: error.message }
     }
@@ -663,7 +655,6 @@ function registerIpc() {
     const changed = settingsStore.set(clean)
     if (changed) {
       // Apply immediately: settings affect the running server.
-      pendingGuiOpen = true
       server.start({ quiet: true })
       broadcastState()
     }
@@ -681,8 +672,8 @@ function registerIpc() {
     restartServer()
     return true
   })
-  ipcMain.handle('dsh:open-gui', () => {
-    openGuiWindow()
+  ipcMain.handle('dsh:back-to-gui', () => {
+    backToGui()
     return true
   })
   ipcMain.handle('dsh:open-external', (_event, url) => {
@@ -740,11 +731,12 @@ function runSmoke() {
   async function check() {
     const state = server.state
     if (SMOKE_ERROR) {
-      // Error-path verification: the settings page must render the server
-      // error strip with working buttons (main-window preload regression guard).
+      // Error-path verification: the server error auto-opens the settings
+      // window, which must render the error strip with working buttons.
       if (state.phase !== 'error') return
+      if (!settingsWindow || settingsWindow.isDestroyed()) return
       try {
-        const dom = await mainWindow.webContents.executeJavaScript(`(() => {
+        const dom = await settingsWindow.webContents.executeJavaScript(`(() => {
           const error = document.getElementById('server-error')
           return {
             hasBridge: typeof window.dsh === 'object' && window.dsh !== null,
@@ -752,14 +744,11 @@ function runSmoke() {
             errText: (document.getElementById('server-error') || {}).textContent || '',
             retryExists: !!document.getElementById('retry'),
             saveExists: !!document.getElementById('save'),
-            openGuiHidden: (() => {
-              const openGui = document.getElementById('openGui')
-              return !openGui || openGui.classList.contains('hidden')
-            })(),
+            backExists: !!document.getElementById('backToGui'),
           }
         })()`)
         const ok =
-          dom.hasBridge && dom.errVisible && dom.errText.length > 0 && dom.retryExists && dom.saveExists && dom.openGuiHidden
+          dom.hasBridge && dom.errVisible && dom.errText.length > 0 && dom.retryExists && dom.saveExists && dom.backExists
         finish(ok, ok
           ? `SMOKE_ERROR_OK phase=${state.phase} errText=${JSON.stringify(dom.errText)}`
           : `SMOKE_FAIL error page broken: ${JSON.stringify(dom)}`)
@@ -783,8 +772,8 @@ function runSmoke() {
         return
       }
     }
-    if (!guiWindow || guiWindow.isDestroyed()) openGuiWindow()
-    const wc = guiWindow.webContents
+    // The MAIN window is the GUI now — it navigates automatically on ready.
+    const wc = mainWindow.webContents
     if (!wc.isLoading() && wc.getURL().startsWith(state.url)) {
       finish(true, `SMOKE_OK ${state.url} harnessSource=${state.harnessSource}`)
     }
