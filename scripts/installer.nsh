@@ -120,4 +120,20 @@ Var /GLOBAL pid
   ${endIf}
 !macroend
 
+; Default install location: C:\Program Files\DeepSeekHarnessDesktop\ when no
+; previous install was remembered and no /D= override was given. initMultiUser
+; already restored a remembered location (HKLM per-machine / HKCU per-user), so
+; only fill in the default when neither registry key has one.
+!macro customInit
+  !insertmacro GetDParameter $R2
+  ${if} $R2 == ""
+    ReadRegStr $R0 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ReadRegStr $R1 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${if} $R0 == ""
+    ${andif} $R1 == ""
+      StrCpy $INSTDIR "$PROGRAMFILES64\DeepSeekHarnessDesktop"
+    ${endif}
+  ${endif}
+!macroend
+
 !endif ; DSH_INSTALLER_NSH

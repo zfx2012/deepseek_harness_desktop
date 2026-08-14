@@ -27,13 +27,14 @@ win:
   artifactName: ${productName}-${version}-${arch}.${ext}
 nsis:
   oneClick: false
+  perMachine: true
   allowToChangeInstallationDirectory: true
-  perMachine: false
   createDesktopShortcut: always
   createStartMenuShortcut: true
   shortcutName: DeepSeek Harness Desktop
   # Custom running-app check: never match the installer/uninstaller itself,
   # so an installer placed inside the install dir can still upgrade in place.
+  # customInit also sets the default install dir to Program Files\DeepSeekHarnessDesktop.
   include: scripts/installer.nsh
 portable:
   artifactName: ${productName}-${version}-portable-${arch}.${ext}
