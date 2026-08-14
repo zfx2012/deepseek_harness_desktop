@@ -156,6 +156,14 @@ function createMainWindow() {
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
   })
+  // Clicking ✕ hides the window to the tray — the app keeps running (tray
+  // resident). Only an explicit quit (tray/menu 退出) actually exits, which
+  // sets isQuitting so this handler lets the window close.
+  win.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    win.hide()
+  })
   // External links open in the system browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
@@ -436,13 +444,10 @@ app.whenReady().then(() => {
   }
 })
 
-// Closing every window quits the app for real (tray stays available while
-// it runs). Quitting disposes the server child (process-tree kill), so a
-// closed app never blocks reinstall/upgrade.
-app.on('window-all-closed', () => {
-  app.quit()
-})
-
+// Tray-resident app: clicking ✕ hides the window (the close handler in
+// createMainWindow preventDefaults it), so window-all-closed never fires for a
+// hidden window. Quitting is explicit — tray/menu 退出 — and disposes the
+// server child (process-tree kill), so a quit app never blocks reinstall.
 app.on('before-quit', () => {
   isQuitting = true
   if (server) server.dispose()
