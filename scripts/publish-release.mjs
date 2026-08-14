@@ -104,9 +104,11 @@ async function requireOk(res) {
 }
 
 if (!TAG) {
-  console.error('usage: node scripts/publish-release.mjs --tag v0.1.0 [--name <title>] [--body <notes|@file>]')
+  console.error('usage: node scripts/publish-release.mjs --tag v0.1.0 [--name <title>] [--body <notes|@file>] [--upload-only] [--force]')
   process.exit(1)
 }
+
+const FORCE = args.includes('--force')
 
 const token = gitCredentialToken()
 let release
@@ -124,22 +126,63 @@ if (args.includes('--upload-only')) {
   console.log(`Release created: ${release.html_url}`)
 }
 
-for (const file of assets()) {
+if (FORCE) {
+  // Replace stale assets: GitHub refuses same-name uploads, so delete first.
+  const existing = await releaseAssets(release.id, token)
+  for (const asset of existing) {
+    console.log(`Deleting existing asset ${asset.name}…`)
+    await requireOk(await apiJson(`${API}/releases/assets/${asset.id}`, { method: 'DELETE' }, token))
+  }
+}
+
+/** Assets of a release; matches names with spaces or GitHub's dot variants. */
+async function releaseAssets(releaseId, token) {
+  const list = await requireOk(await apiJson(`${API}/releases/${releaseId}/assets`, { method: 'GET' }, token))
+  return list.json()
+}
+
+function sameAsset(name, target) {
+  return name === target || name === target.replace(/ /g, '.')
+}
+
+async function uploadAsset(release, file, token) {
   const name = path.basename(file)
   const data = readFileSync(file)
-  console.log(`Uploading ${name} (${(data.length / 1024 / 1024).toFixed(1)} MB)…`)
-  const upload = await apiJson(
-    `https://uploads.github.com/repos/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: data },
-    token,
-  )
-  if (upload.status === 422 && (await upload.text()).includes('already_exists')) {
-    console.log(`  -> already present, skipped`)
-    continue
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(`Uploading ${name} (${(data.length / 1024 / 1024).toFixed(1)} MB)${attempt > 1 ? `, attempt ${attempt}` : ''}…`)
+    let upload
+    try {
+      upload = await apiJson(
+        `https://uploads.github.com/repos/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: data },
+        token,
+      )
+    } catch (error) {
+      // The connection may drop AFTER GitHub accepted the upload — check
+      // whether the asset actually landed before retrying.
+      const existing = await releaseAssets(release.id, token)
+      if (existing.some((a) => sameAsset(a.name, name))) {
+        console.log(`  -> received by GitHub (${error.cause?.code ?? error.message})`)
+        return
+      }
+      if (attempt === 3) throw error
+      console.log(`  -> ${error.cause?.code ?? error.message}, retrying…`)
+      await new Promise((resolve) => setTimeout(resolve, attempt * 5000))
+      continue
+    }
+    if (upload.status === 422 && (await upload.text()).includes('already_exists')) {
+      console.log(`  -> already present, skipped`)
+      return
+    }
+    const okRes = await requireOk(upload)
+    const asset = await okRes.json()
+    console.log(`  -> ${asset.browser_download_url}`)
+    return
   }
-  const okRes = await requireOk(upload)
-  const asset = await okRes.json()
-  console.log(`  -> ${asset.browser_download_url}`)
+}
+
+for (const file of assets()) {
+  await uploadAsset(release, file, token)
 }
 
 console.log('Done.')
