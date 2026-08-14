@@ -1,0 +1,35 @@
+{
+  "name": "dsh-desktop",
+  "productName": "DeepSeek Harness Desktop",
+  "version": "0.1.0",
+  "description": "Desktop shell for the DeepSeek Harness Web GUI: spawns the dsh web server and hosts it in a native window.",
+  "author": {
+    "name": "DeepSeek Harness Desktop Contributors",
+    "email": "deepseek-ai@example.com"
+  },
+  "homepage": "https://github.com/zfx2012/deepseek_harness_desktop",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zfx2012/deepseek_harness_desktop.git"
+  },
+  "license": "MIT",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "smoke:bundled": "electron . --smoke-bundled",
+    "smoke:error": "electron . --smoke-error",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "bundle:harness": "node scripts/bundle-harness.mjs",
+    "dist": "node scripts/prepare-dist.mjs && electron-builder --win",
+    "dist:dir": "node scripts/prepare-dist.mjs && electron-builder --win dir"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

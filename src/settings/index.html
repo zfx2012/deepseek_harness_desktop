@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
+  <title>设置 — DeepSeek Harness Desktop</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f1115; color: #d7dbe2;
+      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      font-size: 13px; padding: 24px 28px 28px;
+    }
+    h1 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
+    .field { margin-bottom: 16px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; color: #aab1bf; }
+    .row { display: flex; gap: 8px; }
+    input[type="text"], input[type="number"] {
+      flex: 1; padding: 8px 10px; border: 1px solid #2a303c; border-radius: 8px;
+      background: #161a22; color: #e3e7ee; font-size: 12px; outline: none;
+    }
+    input:focus { border-color: #4f6ef7; }
+    input[type="checkbox"] { accent-color: #4f6ef7; width: 15px; height: 15px; }
+    button {
+      padding: 8px 14px; border: 0; border-radius: 8px; background: #262b36;
+      color: #d7dbe2; font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    button.primary { background: #4f6ef7; color: #fff; }
+    button:hover { filter: brightness(1.15); }
+    .hint { font-size: 11px; color: #6f7887; margin-top: 5px; line-height: 1.5; }
+    .check { display: flex; align-items: center; gap: 8px; }
+    .check label { margin: 0; }
+    #status { margin-top: 14px; font-size: 12px; min-height: 18px; color: #8b93a3; }
+    #status.ok { color: #6fbf73; }
+    #status.err { color: #e06c6c; }
+    .actions { margin-top: 18px; display: flex; gap: 10px; }
+    pre.log {
+      margin-top: 14px; padding: 10px; border-radius: 8px; background: #161a22;
+      font-size: 10.5px; color: #98a0b3; max-height: 140px; overflow: auto;
+      white-space: pre-wrap; word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <h1>DeepSeek Harness 桌面端设置</h1>
+
+  <div class="field">
+    <label for="harnessPath">Harness 路径（dsh 源码/部署目录，包含 apps/cli/lib/bin.js）</label>
+    <div class="row">
+      <input type="text" id="harnessPath" placeholder="留空 = 自动检测（打包内置 / DSH_DESKTOP_HARNESS / 常见位置）" />
+      <button id="browseHarness">浏览…</button>
+      <button id="detectHarness">自动检测</button>
+    </div>
+    <div class="hint">未打包运行时默认指向 F:\Program Files (x86)\deepseek-harness。</div>
+  </div>
+
+  <div class="field">
+    <label for="dshHome">DSH_HOME 数据目录（会话、设置、插件配置）</label>
+    <div class="row">
+      <input type="text" id="dshHome" placeholder="留空 = 默认 (~/.dsh)" />
+      <button id="browseHome">浏览…</button>
+    </div>
+    <div class="hint">留空使用 harness 默认的 ~/.dsh；改为独立目录可与 CLI/网页版隔离数据。</div>
+  </div>
+
+  <div class="field">
+    <label for="port">监听端口（0 = 系统自动分配）</label>
+    <input type="number" id="port" min="0" max="65535" style="max-width: 140px;" />
+    <div class="hint">固定端口可能与其他实例冲突；0 会由系统挑选空闲端口。</div>
+  </div>
+
+  <div class="field">
+    <label for="workspace">服务器工作目录（会话 cwd）</label>
+    <div class="row">
+      <input type="text" id="workspace" placeholder="留空 = 用户主目录" />
+      <button id="browseWorkspace">浏览…</button>
+    </div>
+  </div>
+
+  <div class="field check">
+    <input type="checkbox" id="autoRestart" />
+    <label for="autoRestart">服务器意外退出时自动重启</label>
+  </div>
+
+  <div class="actions">
+    <button id="save" class="primary">保存并重启服务器</button>
+    <button id="reset">恢复默认</button>
+  </div>
+  <div id="status"></div>
+
+  <details style="margin-top: 14px;">
+    <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">关于 / 内置 Harness 信息</summary>
+    <pre class="log" id="about" style="max-height: 220px;"></pre>
+  </details>
+
+  <details style="margin-top: 8px;">
+    <summary style="cursor: pointer; color: #8b93a3; font-size: 12px;">服务器日志（最近 40 行）</summary>
+    <pre class="log" id="log"></pre>
+  </details>
+
+  <script src="settings.js"></script>
+</body>
+</html>

@@ -1,0 +1,506 @@
+'use strict'
+
+/**
+ * dsh-desktop — Electron main process.
+ *
+ * Responsibilities:
+ *  - single-instance lock
+ *  - settings store (userData/config.json)
+ *  - ServerManager: spawn `dsh web`, readiness, crash handling, process-tree kill
+ *  - main window: loading page -> GUI URL once the server reports ready
+ *  - settings window (file://) and tray menu
+ *  - `--smoke` mode for automated verification: load the GUI, print SMOKE_OK, exit
+ */
+
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell, nativeImage } = require('electron')
+const path = require('node:path')
+const fs = require('node:fs')
+const { SettingsStore } = require('./store')
+const { ServerManager, detectHarnessRoots } = require('./server')
+
+// Auto-update is opt-in: set DSH_DESKTOP_UPDATE_URL to a generic feed URL
+// (e.g. https://example.com/releases/) to enable update checks in packaged
+// builds. Without it the app never touches the network for updates.
+const UPDATE_URL = process.env.DSH_DESKTOP_UPDATE_URL || ''
+let autoUpdater = null
+
+const SMOKE = process.argv.includes('--smoke')
+
+// Startup diagnostics (stderr so they survive any stdout capture).
+const diag = (...args) => console.error('[dsh-desktop]', ...args)
+process.on('uncaughtException', (error) => diag('uncaughtException', error))
+process.on('unhandledRejection', (error) => diag('unhandledRejection', error))
+
+// Sandboxed/dev override: keep all app data inside a chosen directory
+// (otherwise Electron uses %APPDATA%/<AppName>).
+if (process.env.DSH_DESKTOP_USERDATA) {
+  app.setPath('userData', process.env.DSH_DESKTOP_USERDATA)
+}
+
+let settingsStore
+let server
+let mainWindow = null
+let settingsWindow = null
+let tray = null
+let isQuitting = false
+
+// ── single instance ──────────────────────────────────────────────────────────
+
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function sendToWindow(win, channel, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+}
+
+function broadcastState() {
+  const state = server.state
+  sendToWindow(mainWindow, 'dsh:state', state)
+  sendToWindow(settingsWindow, 'dsh:state', state)
+}
+
+/** Load the GUI URL or the built-in shell page into the main window. */
+function navigateMain() {
+  if (!mainWindow) return
+  const { phase, url } = server.state
+  if (phase === 'ready' && url) {
+    mainWindow.loadURL(url)
+  } else {
+    const view = phase === 'error' ? 'error' : phase === 'idle' ? 'stopped' : 'loading'
+    mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'), {
+      query: { phase: view },
+    })
+  }
+}
+
+function createMainWindow() {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    minWidth: 900,
+    minHeight: 600,
+    show: false,
+    title: 'DeepSeek Harness Desktop',
+    backgroundColor: '#0f1115',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  win.on('ready-to-show', () => {
+    win.show()
+  })
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null
+  })
+  // External links open in the system browser, never inside the app.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    const current = server.state.url
+    if (current && url.startsWith(current)) return
+    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) return
+    event.preventDefault()
+    if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
+  })
+  return win
+}
+
+function openSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show()
+    settingsWindow.focus()
+    return
+  }
+  settingsWindow = new BrowserWindow({
+    width: 560,
+    height: 620,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'DeepSeek Harness 桌面端设置',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  settingsWindow.setMenuBarVisibility(false)
+  settingsWindow.loadFile(path.join(__dirname, 'settings', 'index.html'))
+  settingsWindow.on('closed', () => {
+    settingsWindow = null
+  })
+}
+
+function buildMenu() {
+  const viewSubmenu = [
+    { label: '重新加载', role: 'reload' },
+    { label: '实际大小', role: 'resetZoom' },
+    { label: '放大', role: 'zoomIn' },
+    { label: '缩小', role: 'zoomOut' },
+  ]
+  if (!app.isPackaged) {
+    viewSubmenu.unshift({ label: '开发者工具', role: 'toggleDevTools' })
+    viewSubmenu.unshift({ type: 'separator' })
+  }
+  const helpSubmenu = [
+    {
+      label: 'DeepSeek Harness 仓库',
+      click: () => shell.openExternal('https://github.com/deepseek-ai/deepseek-harness'),
+    },
+    { label: '关于', role: 'about' },
+  ]
+  if (UPDATE_URL && app.isPackaged) {
+    helpSubmenu.unshift({ label: '检查更新…', click: checkForUpdates })
+  }
+  const template = [
+    {
+      label: '文件',
+      submenu: [
+        { label: '设置…', accelerator: 'CmdOrCtrl+,', click: openSettingsWindow },
+        { type: 'separator' },
+        { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+      ],
+    },
+    {
+      label: '服务器',
+      submenu: [
+        { label: '重启服务器', accelerator: 'CmdOrCtrl+R', click: () => restartServer() },
+        { label: '停止服务器', click: () => server.stop() },
+        { type: 'separator' },
+        {
+          label: '打开服务器日志文件',
+          click: () => {
+            const logFile = path.join(app.getPath('userData'), 'server.log')
+            shell.showItemInFolder(logFile)
+          },
+        },
+      ],
+    },
+    {
+      label: '视图',
+      submenu: viewSubmenu,
+    },
+    {
+      label: '帮助',
+      submenu: helpSubmenu,
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+/** Initialize the (optional) auto-updater against the generic feed. */
+function initAutoUpdater() {
+  if (!UPDATE_URL || !app.isPackaged || autoUpdater) return
+  try {
+    // Lazy require: electron-updater is only loaded when updates are enabled.
+    const { autoUpdater: updater } = require('electron-updater')
+    autoUpdater = updater
+    updater.autoDownload = false
+    updater.setFeedURL({ provider: 'generic', url: UPDATE_URL })
+    // Silent background check; failures are logged, never surfaced.
+    updater.checkForUpdates().catch((error) => diag('update check failed:', error.message))
+    updater.on('error', (error) => diag('autoUpdater error:', error.message))
+  } catch (error) {
+    diag('autoUpdater init failed:', error.message)
+  }
+}
+
+/** Manual "check for updates" with dialog feedback. */
+async function checkForUpdates() {
+  if (!autoUpdater) {
+    dialog.showMessageBox({ type: 'info', message: '未配置更新源（DSH_DESKTOP_UPDATE_URL）。' })
+    return
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    const version = result?.updateInfo?.version
+    if (!version || version === app.getVersion()) {
+      dialog.showMessageBox({ type: 'info', message: `已是最新版本（${app.getVersion()}）。` })
+      return
+    }
+    const choice = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['下载并安装', '稍后'],
+      defaultId: 0,
+      message: `发现新版本 ${version}（当前 ${app.getVersion()}），是否下载并安装？`,
+    })
+    if (choice.response === 0) {
+      autoUpdater.autoDownload = true
+      await autoUpdater.downloadUpdate()
+      dialog.showMessageBox({ type: 'info', message: '更新已下载，将在退出时安装。' })
+    }
+  } catch (error) {
+    dialog.showMessageBox({ type: 'error', message: `检查更新失败：${error.message}` })
+  }
+}
+
+function createTray() {
+  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png')
+  let icon
+  try {
+    icon = nativeImage.createFromPath(iconPath)
+    if (icon.isEmpty()) icon = nativeImage.createEmpty()
+  } catch {
+    icon = nativeImage.createEmpty()
+  }
+  tray = new Tray(icon)
+  tray.setToolTip('DeepSeek Harness Desktop')
+  const menu = Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => showMainWindow() },
+    { label: '设置…', click: openSettingsWindow },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() },
+  ])
+  tray.setContextMenu(menu)
+  tray.on('double-click', showMainWindow)
+}
+
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    return
+  }
+  // Window was closed: recreate it (tray-only mode must stay recoverable).
+  mainWindow = createMainWindow()
+  navigateMain()
+  mainWindow.show()
+}
+
+function restartServer() {
+  server.start({ quiet: true })
+  navigateMain()
+}
+
+// ── app lifecycle ────────────────────────────────────────────────────────────
+
+app.setName('DeepSeek Harness Desktop')
+
+app.whenReady().then(() => {
+  diag('whenReady, electron', process.versions.electron, 'chrome', process.versions.chrome)
+  settingsStore = new SettingsStore(app.getPath('userData'))
+  server = new ServerManager({
+    settings: settingsStore,
+    logFile: path.join(app.getPath('userData'), 'server.log'),
+    onState: () => {
+      broadcastState()
+      navigateMain()
+    },
+    onLog: (line) => {
+      sendToWindow(settingsWindow, 'dsh:log', String(line))
+    },
+  })
+
+  // Main window (hidden until we have something to show).
+  mainWindow = createMainWindow()
+
+  buildMenu()
+  createTray()
+
+  registerIpc()
+  initAutoUpdater()
+
+  navigateMain()
+  diag('calling server.start()')
+  server.start()
+  diag('server.start() returned, state=', JSON.stringify(server.state))
+
+  if (SMOKE || SMOKE_BUNDLED || SMOKE_ERROR) {
+    runSmoke()
+  }
+})
+
+// Windows keeps running in the tray when every window is closed; quitting is
+// explicit (menu / tray / CmdOrCtrl+Q).
+
+app.on('before-quit', () => {
+  isQuitting = true
+  if (server) server.dispose()
+})
+
+/** Read the bundled-harness manifest (provenance) from the known locations. */
+function readBundleManifest() {
+  const candidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'harness', 'manifest.json') : null,
+    path.join(__dirname, '..', 'harness-deploy', 'manifest.json'),
+  ]
+  for (const file of candidates) {
+    if (!file) continue
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'))
+    } catch {
+      /* not present or unreadable */
+    }
+  }
+  return null
+}
+
+// ── IPC ──────────────────────────────────────────────────────────────────────
+
+function registerIpc() {
+  ipcMain.handle('dsh:get-state', () => server.state)
+  ipcMain.handle('dsh:get-bundle-info', () => {
+    const manifest = readBundleManifest()
+    return {
+      appVersion: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      harnessVersion: manifest ? manifest.harnessVersion : null,
+      builtAt: manifest ? manifest.builtAt : null,
+      packageCount: manifest ? manifest.packageCount : null,
+      harnessCheckout: manifest ? manifest.harnessCheckout : null,
+    }
+  })
+  ipcMain.handle('dsh:get-settings', () => {
+    const s = settingsStore
+    return {
+      harnessPath: s.get('harnessPath'),
+      dshHome: s.get('dshHome'),
+      port: s.get('port'),
+      workspace: s.get('workspace'),
+      autoRestart: s.get('autoRestart'),
+    }
+  })
+  ipcMain.handle('dsh:set-settings', (_event, partial) => {
+    const changed = settingsStore.set(partial ?? {})
+    if (changed) {
+      // Apply immediately: settings affect the running server.
+      server.start({ quiet: true })
+      broadcastState()
+    }
+    return changed
+  })
+  ipcMain.handle('dsh:pick-directory', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+  ipcMain.handle('dsh:detect-harness', () => detectHarnessRoots())
+  ipcMain.handle('dsh:restart-server', () => {
+    restartServer()
+    return true
+  })
+  ipcMain.on('dsh:open-settings', openSettingsWindow)
+}
+
+// ── smoke verification (--smoke / --smoke-bundled / --smoke-error / --smoke-update) ─
+
+const SMOKE_BUNDLED = process.argv.includes('--smoke-bundled')
+const SMOKE_ERROR = process.argv.includes('--smoke-error')
+const SMOKE_UPDATE = process.argv.includes('--smoke-update')
+
+/** Update-feed verification: expect DSH_DESKTOP_UPDATE_URL to offer DSH_DESKTOP_EXPECT_VERSION. */
+async function runSmokeUpdate() {
+  const url = process.env.DSH_DESKTOP_UPDATE_URL
+  const expected = process.env.DSH_DESKTOP_EXPECT_VERSION
+  if (!url) {
+    console.log('SMOKE_UPDATE_FAIL DSH_DESKTOP_UPDATE_URL is not set')
+    app.exit(1)
+    return
+  }
+  try {
+    const { autoUpdater } = require('electron-updater')
+    autoUpdater.autoDownload = false
+    autoUpdater.setFeedURL({ provider: 'generic', url })
+    const result = await autoUpdater.checkForUpdates()
+    const version = result?.updateInfo?.version
+    if (expected && version !== expected) {
+      console.log(`SMOKE_UPDATE_FAIL version=${version} expected=${expected}`)
+      app.exit(1)
+      return
+    }
+    console.log(`SMOKE_UPDATE_OK version=${version}`)
+    app.exit(0)
+  } catch (error) {
+    console.log(`SMOKE_UPDATE_FAIL ${error.message}`)
+    app.exit(1)
+  }
+}
+
+function runSmoke() {
+  const finish = (ok, message) => {
+    clearTimeout(timer)
+    clearInterval(interval)
+    console.log(message)
+    // app.exit() skips before-quit; dispose the server child explicitly.
+    server.dispose()
+    app.exit(ok ? 0 : 1)
+  }
+  const timer = setTimeout(() => finish(false, 'SMOKE_FAIL timeout'), 90000)
+  const interval = setInterval(check, 500)
+
+  async function check() {
+    const state = server.state
+    if (SMOKE_ERROR) {
+      // Error-path verification: the shell page must render the error card
+      // with working buttons (main-window preload regression guard).
+      if (state.phase !== 'error') return
+      try {
+        const dom = await mainWindow.webContents.executeJavaScript(`(() => {
+          const error = document.getElementById('error')
+          const stopped = document.getElementById('stopped')
+          return {
+            hasBridge: typeof window.dsh === 'object' && window.dsh !== null,
+            errVisible: !!error && !error.classList.contains('hidden'),
+            errText: (document.getElementById('error-msg') || {}).textContent || '',
+            retryExists: !!document.getElementById('retry'),
+            settingsExists: !!document.getElementById('settings'),
+            stoppedVisible: !!stopped && !stopped.classList.contains('hidden'),
+          }
+        })()`)
+        const ok = dom.hasBridge && dom.errVisible && dom.retryExists && dom.settingsExists && !dom.stoppedVisible
+        finish(ok, ok
+          ? `SMOKE_ERROR_OK phase=${state.phase} errText=${JSON.stringify(dom.errText)}`
+          : `SMOKE_FAIL error page broken: ${JSON.stringify(dom)}`)
+      } catch (error) {
+        finish(false, `SMOKE_FAIL executeJavaScript: ${error.message}`)
+      }
+      return
+    }
+    if (state.phase === 'error') {
+      finish(false, `SMOKE_FAIL server error: ${state.error}\n--- server log ---\n${state.logTail.join('\n')}`)
+      return
+    }
+    if (state.phase !== 'ready') return
+    // Provenance assertion: --smoke-bundled must run from the packaged harness.
+    if (SMOKE_BUNDLED && state.harnessSource !== 'bundled') {
+      finish(false, `SMOKE_FAIL harnessSource=${state.harnessSource} (expected 'bundled'), root=${state.harnessRoot}`)
+      return
+    }
+    const wc = mainWindow.webContents
+    if (!wc.isLoading() && wc.getURL().startsWith(state.url)) {
+      finish(true, `SMOKE_OK ${state.url} harnessSource=${state.harnessSource}`)
+    }
+  }
+  mainWindow.webContents.on('did-finish-load', check)
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
+    // ERR_ABORTED (-3): the shell page was replaced by our own navigation to
+    // the GUI URL once the server became ready — not a real failure.
+    if (code === -3) return
+    finish(false, `SMOKE_FAIL did-fail-load ${code} ${desc}`)
+  })
+}

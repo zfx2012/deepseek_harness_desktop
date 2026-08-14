@@ -1,0 +1,37 @@
+appId: ai.deepseek.harness.desktop
+productName: DeepSeek Harness Desktop
+copyright: Copyright © 2025 DeepSeek
+directories:
+  output: release
+  buildResources: build
+files:
+  - src/**
+  - assets/icon.png
+  - package.json
+# The bundled harness is copied by scripts/after-pack.cjs, NOT via
+# extraResources: electron-builder's copy filter silently drops any top-level
+# node_modules directory, which would strip the harness dependency tree.
+afterPack: scripts/after-pack.cjs
+asar: true
+# Auto-update feed (generic). Replace the placeholder with the real static
+# hosting URL; `npm run dist` then emits latest.yml next to the installers.
+# The app only checks for updates when DSH_DESKTOP_UPDATE_URL is set at runtime
+# (see src/main.js), so builds without a feed simply skip updating.
+publish:
+  provider: generic
+  url: https://example.com/dsh-desktop/releases
+win:
+  icon: assets/icon.ico
+  target:
+    - nsis
+    - portable
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: DeepSeek Harness Desktop
+portable:
+  artifactName: ${productName}-${version}-portable-${arch}.${ext}

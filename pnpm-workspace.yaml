@@ -1,0 +1,5 @@
+# pnpm 11 build-script policy. Electron binaries are restored manually
+# (see README "开发运行"), so build scripts stay disabled.
+allowBuilds:
+  electron: false
+  electron-winstaller: false

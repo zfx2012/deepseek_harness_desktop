@@ -1,0 +1,62 @@
+name: build-desktop
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install desktop deps
+        run: pnpm install --ignore-scripts
+      - name: Restore Electron binary
+        shell: pwsh
+        run: |
+          node node_modules/electron/install.js
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      # The harness checkout must be reachable: set DSH_DESKTOP_HARNESS to a
+      # checked-out deepseek-harness copy (repo secret/variable or a sibling
+      # checkout in the runner workspace).
+      - name: Bundle harness closure
+        run: node scripts/bundle-harness.mjs --force
+        env:
+          DSH_DESKTOP_HARNESS: ${{ vars.DSH_DESKTOP_HARNESS }}
+
+      # Full verification: unit tests -> bundle validation -> package ->
+      # bundled smoke (must use resources/harness) -> error-path smoke ->
+      # no-node smoke (ELECTRON_RUN_AS_NODE fallback).
+      - name: Verify (tests + package + smoke suite)
+        shell: pwsh
+        run: pwsh scripts/verify.ps1
+
+      - name: Build installers (NSIS + portable)
+        run: npm run dist
+        env:
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
