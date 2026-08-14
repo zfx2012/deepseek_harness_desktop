@@ -30,13 +30,37 @@ jobs:
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
-      # The harness checkout must be reachable: set DSH_DESKTOP_HARNESS to a
-      # checked-out deepseek-harness copy (repo secret/variable or a sibling
-      # checkout in the runner workspace).
-      - name: Bundle harness closure
-        run: node scripts/bundle-harness.mjs --force
-        env:
-          DSH_DESKTOP_HARNESS: ${{ vars.DSH_DESKTOP_HARNESS }}
+      # The 280MB harness closure is cached. On a miss the official
+      # deepseek-harness repo is checked out and built from source (public
+      # repo, zero configuration); bump the cache key when the official repo
+      # version changes (or let the 7-day cache eviction rebuild it).
+      - name: Restore bundled harness (cache)
+        id: harness-cache
+        uses: actions/cache@v4
+        with:
+          path: harness-deploy
+          key: harness-bundle-0.1.0-rc.5-v1
+
+      - name: Checkout official harness (cache miss)
+        if: steps.harness-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          path: harness-checkout
+
+      - name: Install official harness deps (cache miss)
+        if: steps.harness-cache.outputs.cache-hit != 'true'
+        run: pnpm install --frozen-lockfile
+        working-directory: harness-checkout
+
+      - name: Build official harness (cache miss)
+        if: steps.harness-cache.outputs.cache-hit != 'true'
+        run: pnpm run build
+        working-directory: harness-checkout
+
+      - name: Bundle harness closure (cache miss)
+        if: steps.harness-cache.outputs.cache-hit != 'true'
+        run: node scripts/bundle-harness.mjs --force --harness harness-checkout
 
       # Full verification: unit tests -> bundle validation -> package ->
       # bundled smoke (must use resources/harness) -> error-path smoke ->
@@ -44,6 +68,10 @@ jobs:
       - name: Verify (tests + package + smoke suite)
         shell: pwsh
         run: pwsh scripts/verify.ps1
+        env:
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
       - name: Build installers (NSIS + portable)
         run: npm run dist

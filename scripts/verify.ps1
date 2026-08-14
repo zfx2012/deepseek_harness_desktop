@@ -21,9 +21,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$env:ELECTRON_BUILDER_CACHE = Join-Path $root '.cache\electron-builder'
-$env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
-$env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/'
+# Respect externally provided mirrors/caches (CI shares one cache across steps).
+if (-not $env:ELECTRON_BUILDER_CACHE) { $env:ELECTRON_BUILDER_CACHE = Join-Path $root '.cache\electron-builder' }
+if (-not $env:ELECTRON_BUILDER_BINARIES_MIRROR) { $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/' }
+if (-not $env:ELECTRON_MIRROR) { $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/' }
 
 function Invoke-Step {
   param([string]$Name, [scriptblock]$Body)
