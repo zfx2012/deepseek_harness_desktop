@@ -6,7 +6,5 @@ harness-deploy/
 .smoke-userdata/
 .smoke-home-closure/
 .verify-*/
-release/win-unpacked/
-release/builder-debug.yml
-release/*.exe
+release/
 *.log

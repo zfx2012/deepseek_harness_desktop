@@ -126,15 +126,6 @@ if (args.includes('--upload-only')) {
   console.log(`Release created: ${release.html_url}`)
 }
 
-if (FORCE) {
-  // Replace stale assets: GitHub refuses same-name uploads, so delete first.
-  const existing = await releaseAssets(release.id, token)
-  for (const asset of existing) {
-    console.log(`Deleting existing asset ${asset.name}…`)
-    await requireOk(await apiJson(`${API}/releases/assets/${asset.id}`, { method: 'DELETE' }, token))
-  }
-}
-
 /** Assets of a release; matches names with spaces or GitHub's dot variants. */
 async function releaseAssets(releaseId, token) {
   const list = await requireOk(await apiJson(`${API}/releases/${releaseId}/assets`, { method: 'GET' }, token))
@@ -143,6 +134,22 @@ async function releaseAssets(releaseId, token) {
 
 function sameAsset(name, target) {
   return name === target || name === target.replace(/ /g, '.')
+}
+
+/**
+ * --force per-asset replacement: delete the OLD asset of the same name right
+ * before uploading its replacement, so a failure only ever affects that one
+ * asset (never wipes the whole release before any upload succeeds).
+ */
+async function deleteMatchingAssets(releaseId, file, token) {
+  const name = path.basename(file)
+  const existing = await releaseAssets(releaseId, token)
+  for (const asset of existing) {
+    if (sameAsset(asset.name, name)) {
+      console.log(`Deleting existing asset ${asset.name}…`)
+      await requireOk(await apiJson(`${API}/releases/assets/${asset.id}`, { method: 'DELETE' }, token))
+    }
+  }
 }
 
 /** Poll the release assets until `name` shows up (GitHub lands uploads async). */
@@ -191,6 +198,9 @@ async function uploadAsset(release, file, token) {
 }
 
 for (const file of assets()) {
+  if (FORCE) {
+    await deleteMatchingAssets(release.id, file, token)
+  }
   await uploadAsset(release, file, token)
 }
 

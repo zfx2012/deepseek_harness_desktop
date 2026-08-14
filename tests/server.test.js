@@ -61,7 +61,9 @@ function makeManager(opts) {
     onState: () => {},
     onLog: () => {},
     spawnImpl,
-    spawnSyncImpl: () => ({ status: 0 }),
+    // Fake `node --version` probe: satisfies the harness engines, so the
+    // launch decision lands on the system-node branch.
+    spawnSyncImpl: () => ({ status: 0, stdout: 'v24.18.0\n' }),
     ...opts,
   })
   return { manager, spawned, tmp, harness }
@@ -147,6 +149,26 @@ test('stale readiness lines from previous boots never trigger ready', async () =
   await sleep(900)
   assert.equal(manager.phase, 'ready')
   assert.equal(manager.url, 'http://127.0.0.1:22222')
+
+  manager.dispose()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('multi-byte (CJK) log lines are forwarded exactly once', async () => {
+  const { manager, tmp } = makeManager()
+  const seen = []
+  manager.onLog = (line) => seen.push(line)
+
+  manager.start()
+  // UTF-8 CJK text: byte length > character length, so a character-based
+  // file-position would re-read the tail and duplicate/garbble the line.
+  fs.appendFileSync(manager.logFile, '插件加载中：用户配置已合并，等待服务器就绪……\n')
+  fs.appendFileSync(manager.logFile, 'dsh web: http://127.0.0.1:33333\n')
+  await sleep(900)
+  assert.equal(manager.phase, 'ready')
+  const joined = seen.join('\n')
+  assert.equal(joined.split('插件加载中：用户配置已合并').length - 1, 1, 'CJK line must appear exactly once')
+  assert.equal(joined.split('dsh web:').length - 1, 1, 'readiness line must appear exactly once')
 
   manager.dispose()
   fs.rmSync(tmp, { recursive: true, force: true })

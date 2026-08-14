@@ -269,7 +269,7 @@ class ServerManager {
     // the child never needs the SeCreateSymbolicLinkPrivilege.
     this.preHealProfiles(home || path.join(os.homedir(), '.dsh'), this.harnessRoot)
 
-    const launch = resolveNodeLaunch()
+    const launch = resolveNodeLaunch(this.spawnSyncImpl)
     this.log(`启动: ${launch.command} ${[...launch.args, ...args].join(' ')}  (cwd: ${cwd}${home ? `, DSH_HOME: ${home}` : ''})`)
     this.error = null
     this.url = null
@@ -432,8 +432,10 @@ class ServerManager {
       try { fs.renameSync(one, two) } catch { /* first rotation */ }
       fs.renameSync(this.logFile, one)
       this.log(`[server] log rotated (>${Math.round(LOG_ROTATE_BYTES / 1024 / 1024)}MB)`)
-    } catch {
-      /* rotation is best-effort */
+    } catch (error) {
+      // Rotation is best-effort, but silence would hide a permanently locked
+      // log file until the size cap blocks diagnostics entirely.
+      this.log(`[server] log rotation failed: ${error.message}`)
     }
   }
 
@@ -546,6 +548,7 @@ class ServerManager {
     this.stopping = true
     this.stopChild()
     this.url = null
+    this.error = null
     this.setState({ phase: 'idle' })
   }
 

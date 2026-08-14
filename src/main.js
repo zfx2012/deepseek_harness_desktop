@@ -111,6 +111,24 @@ function broadcastState() {
   sendToWindow(mainWindow, 'dsh:state', state)
 }
 
+/**
+ * Navigation whitelist: only the loopback HTTP(S) origins the app itself
+ * serves. Exact hostname match — `startsWith("http://localhost")` would let
+ * through hosts like `localhost.evil.com`.
+ */
+function isAllowedLocalUrl(raw) {
+  let url
+  try {
+    url = new URL(raw)
+  } catch {
+    return false
+  }
+  return (
+    (url.protocol === 'http:' || url.protocol === 'https:') &&
+    (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]')
+  )
+}
+
 /** The main window is the settings page: it never navigates away. */
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -140,7 +158,7 @@ function createMainWindow() {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, url) => {
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) return
+    if (isAllowedLocalUrl(url)) return
     event.preventDefault()
     if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url)
   })
@@ -188,7 +206,7 @@ function openGuiWindow() {
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (event, target) => {
-    if (target.startsWith('http://127.0.0.1') || target.startsWith('http://localhost')) return
+    if (isAllowedLocalUrl(target)) return
     event.preventDefault()
     if (target.startsWith('http://') || target.startsWith('https://')) shell.openExternal(target)
   })
@@ -579,6 +597,12 @@ function registerIpc() {
   // per-user copy under userData; the setting is then persisted so future
   // updates keep hitting that copy.
   ipcMain.handle('dsh:update-harness', async (_event, version) => {
+    // Validate the version BEFORE stopping the server — an invalid value must
+    // not cost a needless stop/start round-trip.
+    const ver = String(version ?? '').trim()
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(ver)) {
+      return { ok: false, error: `无效的版本号: ${ver}` }
+    }
     const effective = effectiveSettings()
     const targetPath = resolveHarnessPath(effective.harnessPath)
     const target =
@@ -600,10 +624,10 @@ function registerIpc() {
     }
     server.stop() // native modules lock files on Windows while the server runs
     try {
-      const outcome = await runHarnessUpdateInChild(String(version), installTarget, fresh, (text) => {
+      const outcome = await runHarnessUpdateInChild(ver, installTarget, fresh, (text) => {
         sendToWindow(mainWindow, 'dsh:update-progress', String(text))
       })
-      if (!outcome.ok) return { ok: false, error: outcome.error }
+      if (!outcome.ok) throw new Error(outcome.error || '更新失败（未知错误）')
       const result = outcome.result
       if (switched) {
         // Persist the per-user copy so the next boot (and next update) uses it.
@@ -613,13 +637,22 @@ function registerIpc() {
       server.start({ quiet: true })
       return { ok: true, version: result.version, packageCount: result.packageCount, harnessPath: installTarget, switched }
     } catch (error) {
-      server.start({ quiet: true }) // resume with the old kernel
+      // Resume with the old kernel AND reopen the GUI once ready — the update
+      // failure should not leave the user staring at a stopped server.
+      pendingGuiOpen = true
+      server.start({ quiet: true })
       return { ok: false, error: error.message }
     }
   })
   ipcMain.handle('dsh:get-settings', () => effectiveSettings())
   ipcMain.handle('dsh:set-settings', (_event, partial) => {
-    const changed = settingsStore.set(partial ?? {})
+    // Re-validate in the main process too — the renderer may be compromised.
+    const clean = { ...(partial ?? {}) }
+    if (clean.port !== undefined) {
+      const port = Number(clean.port)
+      if (!Number.isInteger(port) || port < 0 || port > 65535) delete clean.port
+    }
+    const changed = settingsStore.set(clean)
     if (changed) {
       // Apply immediately: settings affect the running server.
       pendingGuiOpen = true

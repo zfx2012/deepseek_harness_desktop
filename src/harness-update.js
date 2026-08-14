@@ -241,8 +241,17 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
         }, null, 2) + '\n',
       )
 
+      // Pin the dependency tree for reproducibility audits: the npm lockfile
+      // from the stage records the exact transitive versions that were
+      // installed into this tree.
+      const lock = path.join(stage, 'package-lock.json')
+      if (fs.existsSync(lock)) {
+        fs.copyFileSync(lock, path.join(temp, 'package-lock.json'))
+      }
+
       // 5. atomic swap: old tree moves aside, new tree takes its name. If the
-      //    second rename fails, the old tree is restored.
+      //    second rename fails, the old tree is restored (a failing rollback
+      //    must not mask the original error — it is attached as a warning).
       const hadOld = fs.existsSync(targetRoot)
       if (hadOld) {
         fs.rmSync(backup, { recursive: true, force: true })
@@ -251,7 +260,13 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
       try {
         fs.renameSync(temp, targetRoot)
       } catch (error) {
-        if (hadOld) fs.renameSync(backup, targetRoot) // roll back to the old tree
+        if (hadOld) {
+          try {
+            fs.renameSync(backup, targetRoot)
+          } catch (rollbackError) {
+            error.message = `${error.message}（且回滚失败：${rollbackError.message}，旧树保留在 ${backup}）`
+          }
+        }
         throw error
       }
       if (hadOld) {

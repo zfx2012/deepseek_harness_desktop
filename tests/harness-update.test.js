@@ -149,6 +149,38 @@ test('installHarnessUpdate refuses non-deploy targets and npm failures', async (
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
+test('installHarnessUpdate rejects maliciously crafted version strings', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-upd-test-'))
+  const target = path.join(tmp, 'harness')
+  makeDeployHarness(target)
+  // Anchored pattern: prefixes that used to pass must now be rejected.
+  await assert.rejects(installHarnessUpdate('1.2.3; rm -rf C:\\', target, { spawnImpl: fakeNpmInstall() }), /无效的版本号/)
+  await assert.rejects(installHarnessUpdate('1.2.3 & calc', target, { spawnImpl: fakeNpmInstall() }), /无效的版本号/)
+  await assert.rejects(installHarnessUpdate('1.2', target, { spawnImpl: fakeNpmInstall() }), /无效的版本号/)
+  // Valid forms still pass the gate (the fake npm then takes over).
+  assert.equal((await installHarnessUpdate('1.2.3', target, { spawnImpl: fakeNpmInstall() })).ok, true)
+  assert.equal((await installHarnessUpdate('1.2.3-rc.6', target, { spawnImpl: fakeNpmInstall() })).ok, true)
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('installHarnessUpdate does not fall back to cmd.exe on timeouts', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-upd-test-'))
+  const target = path.join(tmp, 'harness')
+  makeDeployHarness(target)
+  const calls = []
+  const spawnImpl = (cmd, args) => {
+    calls.push(cmd)
+    const err = new Error('spawnSync ETIMEDOUT')
+    err.code = 'ETIMEDOUT'
+    return { status: null, error: err }
+  }
+  // A timeout must surface as a failure — it must NOT re-run the whole
+  // install through cmd.exe (which would double the 15-minute wait).
+  await assert.rejects(installHarnessUpdate('1.2.3', target, { npmCommand: 'npm.cmd', spawnImpl }), /npm install 失败/)
+  assert.deepEqual(calls, ['npm.cmd'], 'cmd.exe fallback must not trigger for ETIMEDOUT')
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
 test('installHarnessUpdate fresh mode builds into an empty directory', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-upd-test-'))
   const target = path.join(tmp, 'bundle')
