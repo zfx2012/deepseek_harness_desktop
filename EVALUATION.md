@@ -18,6 +18,7 @@
 |------|------|
 | 不做代码签名（含自签名与 CA） | 删除自签名证书（build/）、签名相关文档与计划条目；分发者自行承担 SmartScreen 提示 |
 | 不做 Linux/macOS | 删除 main.js 的 darwin/activate 分支、server.js 的 POSIX kill 分支、build-closure 的 symlink 分支与 ETIMEDOUT/SIGTERM 双判定，Windows-only 路径简化 |
+| 不做 CI | 删除 .github/workflows；本地验证链 scripts/verify.ps1 保留为唯一验证入口 |
 
 ## 3. 项目快照
 
@@ -39,14 +40,13 @@
 | P1 核心缺陷（伪 ready / 托盘恢复 / stopped UI / Node 门槛 / fd 泄漏 / 日志轮转 / 日志停采） | 7 | ✅ 全修 | 单测覆盖伪 ready；裁剪 PATH 实测 ELECTRON_RUN_AS_NODE |
 | 实测新发现（profiles symlink EPERM / 显式路径静默回退 / config BOM） | 3 | ✅ 全修 | 全新 DSH_HOME 冒烟通过；SMOKE_ERROR_OK errText 正确；store 读回正确值 |
 | P2 工程卫生 | 11 | ✅ 全修 | 闭包 1,547MB→280MB；`bundle validation passed` |
-| 阶段 3 基建（单测 + CI workflow） | 单测 8/8 ✅；workflow ✅（待真实 runner） | | |
+| 阶段 3 基建（单测） | 单测 8/8 ✅ | | |
 
 ## 5. 未接线清单（如实记录）
 
 | # | 项 | 状态 | 说明 |
 |---|----|------|------|
 | U1 | `--smoke-update` 自动更新实测 | ⚠️ 死代码 | `runSmokeUpdate()` 已实现（main.js），但 smoke 入口未包含 `SMOKE_UPDATE`，verify.ps1 无对应步骤 |
-| U2 | CI 真实运行 | ❌ 未验证 | workflow 就绪（引用 verify.ps1），依赖 `vars.DSH_DESKTOP_HARNESS`；无 GitHub runner 实证 |
 
 ## 6. 已知问题（本轮识别）
 
@@ -66,7 +66,7 @@
 | 打包/分发 | 4/5 | 自包含可移植（实测复制验证）；无签名（范围决策，分发时 SmartScreen 提示） |
 | 更新机制 | 2.5/5 | 代码集成完整、latest.yml 生成；端到端未实测（U1） |
 | 可维护性 | 4/5 | 构建脚本注释详尽；范围裁剪后平台分支更少、更简单 |
-| **综合** | **4.0/5** | 单机可用；待闭环项仅更新实测与 CI 真跑 |
+| **综合** | **4.0/5** | 单机可用；待闭环项仅自动更新端到端实测 |
 
 ## 8. 建议路线（建议，未执行）
 
@@ -77,12 +77,11 @@
 
 **中期**
 4. 真实 generic feed 部署 + 全链更新实测（下载+sha512 校验）；
-5. CI 真实 runner 跑通；
-6. harness 版本联动自动化（上游 release 触发重打包）。
+5. harness 版本联动自动化（上游 release 触发重打包）。
 
 **长期**
-7. 更新+发布的自动化流水线。
+6. 更新+发布的自动化流水线。
 
 ## 9. 结论
 
-项目从"骨架正确但交付物不可用"（v1 审计时的判断）演进到 **Windows 交付物真实自包含可用**，两轮修复的每一项都有可复现的验证凭证（bundled 来源断言、错误页 DOM 断言、目录移动复制 boot、无 Node 裁剪 PATH 实测）。产品范围明确为 Windows 单平台、不签名分发后，代码路径更简单；剩余待办（更新实测接线、N1 竞态、CI 真跑）都有明确的执行路径，无技术未知数。
+项目从"骨架正确但交付物不可用"（v1 审计时的判断）演进到 **Windows 交付物真实自包含可用**，两轮修复的每一项都有可复现的验证凭证（bundled 来源断言、错误页 DOM 断言、目录移动复制 boot、无 Node 裁剪 PATH 实测）。产品范围明确为 Windows 单平台、不签名分发、无 CI 后，代码路径更简单；剩余待办（更新实测接线、N1 竞态）都有明确的执行路径，无技术未知数。

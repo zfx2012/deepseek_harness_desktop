@@ -93,12 +93,12 @@
 | P2-8 quiet 污染 | setState 剥离非状态键 | 代码审查 |
 | P2-9 smoke 覆盖 | --smoke-bundled / --smoke-error 模式 | 全部实测通过 |
 | P2-10 gitignore | 补调试产物 | 代码审查 |
-| 单测/CI | tests/server.test.js（8 例，node:test）；.github/workflows/build.yml（install→test→bundle→dist→bundled smoke 强制断言） | 8/8 通过；CI 待接入真实 runner |
+| 单测 | tests/server.test.js（8 例，node:test，注入假子进程） | 8/8 通过 |
 
 **遗留（阶段 3 / 长期）——状态已由 v3 重新评估报告接管，详见 [EVALUATION.md](./EVALUATION.md) §5/§6/§8**：
 - ~~内置 Node 22.16 低于 engines 下限~~ → **已解决**：升级 Electron 37 → **43.4.0**（内置 Node 24.18.1 满足 engines）；升级还暴露并修复了 Node 24 下回退路径需要 `--expose-internals`（HMR 服务要求，`server.js` fallback args）
 - 自动更新：electron-updater 已集成（可选启用，`DSH_DESKTOP_UPDATE_URL` + generic feed，`latest.yml` 已生成）；端到端未实测（`--smoke-update` 验证代码存在但未接入入口——EVALUATION U1）
-- CI：workflow 已引用 `scripts/verify.ps1` 全量验证链；**待 GitHub runner 真实运行**（EVALUATION U2）
+- ~~CI~~ → **已移除**（产品范围决策：无 CI；本地验证链 scripts/verify.ps1 保留）
 - ~~代码签名~~ → **已移除**（产品范围决策：不签名分发；自签名证书与 build/ 已删除）
 - ~~macOS/Linux 打包~~ → **已移除**（产品范围决策：Windows 单平台；darwin/activate/POSIX kill/symlink 分支代码已删除）
 - desktop 与 harness 版本联动：**已落地**——bundle manifest（版本/构建时间/包数）经 IPC 暴露，设置页"关于"展示
@@ -127,6 +127,6 @@
 ### 阶段 3 —— 发布级（已按产品范围决策裁剪）
 
 11. ~~代码签名 + 自动更新~~ → 签名已移除（范围决策）；自动更新已集成待实测（EVALUATION U1）。
-12. 单元测试（server.js 状态机 mock）+ CI（build-closure → dist → bundled smoke 强制断言）——**已落地**。
+12. 单元测试（server.js 状态机 mock）——**已落地**；~~CI~~ → 已移除（范围决策）。
 13. ~~多平台评估~~ → 已移除（范围决策：Windows 单平台）。
 14. 版本联动策略：桌面端 release 与 harness 版本对应关系固化（当前内置为 checkout rc.5 快照）——manifest 已落地，自动化触发待做（EVALUATION §8-6）。

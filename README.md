@@ -27,7 +27,7 @@ scripts/
   bundle-harness.mjs   打包 harness 到 harness-deploy/（build-closure 的封装）
   prepare-dist.mjs     dist 前校验闭包完整性（缺依赖树/含链接即中止）
   after-pack.cjs       electron-builder 钩子：绕过其 node_modules 过滤，复制闭包进 resources/
-  verify.ps1          统一验证链：单测 → 闭包校验 → 打包 → 三种 smoke（本地与 CI 共用）
+  verify.ps1          本地统一验证链：单测 → 闭包校验 → 打包 → 三种 smoke
 tests/
   server.test.js       ServerManager 状态机单元测试（node:test + 注入假子进程）
 assets/          应用图标（icon.png / icon.ico）
