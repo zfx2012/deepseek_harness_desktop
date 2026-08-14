@@ -57,10 +57,19 @@ powershell -File scripts/verify.ps1  # 全量验证链（打包 + 三种 smoke�
 ## 打包发布
 
 ```bash
-npm run bundle:harness   # 从 checkout 物化生产依赖闭包到 harness-deploy/（~280MB，自包含）
+npm run bundle:harness   # 从 harness checkout 物化生产依赖闭包到 harness-deploy/（~280MB，自包含）
 npm run dist             # electron-builder：release/ 下产出安装包 + 便携 exe
 npm run dist:dir         # 仅产出 win-unpacked/（打包版冒烟用）
 ```
+
+**harness 来源解析**（`scripts/harness-resolve.mjs`，bundle 与 prepare 共用）：
+1. `--harness <已构建的checkout>` 显式指定
+2. 环境变量 `DSH_DESKTOP_HARNESS`
+3. 常见本地路径（`F:\Program Files (x86)\deepseek-harness`、`C:\`、`D:\`、`~/deepseek-harness`）
+4. **自动获取**：浅克隆官方仓库 `https://github.com/deepseek-ai/deepseek-harness.git` 到
+   `.harness-checkout/`，并自动执行 `pnpm install --frozen-lockfile` + `pnpm run build`
+   （缓存复用；`--update` 重新拉取构建；`--no-auto-fetch` 关闭联网，离线打包）。
+   首次自动获取需要几分钟（依赖安装 + 全量构建），之后复用缓存。
 
 - 闭包由 `scripts/build-closure.mjs` 物化：按 Node 解析语义遍历生产依赖（含平台过滤的
   optionalDependencies 原生二进制，如 sharp/koffi），唯一版本包 hoisted 到顶层、
