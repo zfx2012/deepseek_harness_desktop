@@ -149,7 +149,7 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
   }
   const run = spawnImpl ?? spawnSync
   const npmCmd = npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
-  // Some sandboxed/CI environments refuse to spawn .cmd shims directly
+  // Some restricted environments refuse to spawn .cmd shims directly
   // (EINVAL/ENOENT); retry through cmd.exe /c only for those spawn-level
   // failures. Other failures (timeouts, non-zero exits) must surface as-is —
   // retrying would double-run a 3-minute install.

@@ -11,6 +11,21 @@
 !ifndef DSH_INSTALLER_NSH
 !define DSH_INSTALLER_NSH
 
+; Install directory name WITHOUT spaces: override the APP_FILENAME define that
+; electron-builder sets from productName ("DeepSeek Harness Desktop"). This
+; include is spliced BEFORE the templates, so every ${APP_FILENAME} expansion
+; in multiUser.nsh (default dir) and assistedInstaller.nsh (instFilesPre
+; sub-folder guard) uses "DeepSeekHarnessDesktop" — the default install dir
+; becomes C:\Program Files\DeepSeekHarnessDesktop with no extra nesting.
+; (The uninstaller's RMDir "$APPDATA\${APP_FILENAME}" only runs when
+; DELETE_APP_DATA_ON_UNINSTALL is enabled — it is not — so no side effects.)
+!undef APP_FILENAME
+!define APP_FILENAME "DeepSeekHarnessDesktop"
+; Compile-time guard: fail loudly if the override above stops winning.
+!if "${APP_FILENAME}" != "DeepSeekHarnessDesktop"
+  !error "APP_FILENAME override failed — install dir would contain spaces"
+!endif
+
 !include "getProcessInfo.nsh"
 Var /GLOBAL pid
 ; IsPowerShellAvailable is declared by the IS_POWERSHELL_AVAILABLE macro
@@ -120,14 +135,11 @@ Var /GLOBAL pid
   ${endIf}
 !macroend
 
-; Default install location: C:\Program Files\<APP_FILENAME> when no previous
-; install was remembered and no /D= override was given. The default MUST end
-; with ${APP_FILENAME} (the product name): assistedInstaller.nsh's instFilesPre
-; appends a "${APP_FILENAME}" sub-folder to any $INSTDIR that does not contain
-; it, so a custom name like "DeepSeekHarnessDesktop" (no spaces) would end up
-; as C:\Program Files\DeepSeekHarnessDesktop\DeepSeek Harness Desktop.
-; initMultiUser already restored a remembered location (HKLM per-machine /
-; HKCU per-user), so only fill in the default when neither registry key has one.
+; Default install location: C:\Program Files\DeepSeekHarnessDesktop (APP_FILENAME
+; was redefined above, so instFilesPre sees the name and does NOT append a
+; nested sub-folder). initMultiUser already restored a remembered location
+; (HKLM per-machine / HKCU per-user), so the default only fills in when neither
+; registry key has one.
 !macro customInit
   !insertmacro GetDParameter $R2
   ${if} $R2 == ""

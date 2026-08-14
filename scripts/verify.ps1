@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Unified verification pipeline for DeepSeek Harness Desktop (local + CI).
+  Unified verification pipeline for DeepSeek Harness Desktop (local).
 
 .DESCRIPTION
   Runs, in order:
@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-# Respect externally provided mirrors/caches (CI shares one cache across steps).
+# Respect externally provided mirrors/caches.
 if (-not $env:ELECTRON_BUILDER_CACHE) { $env:ELECTRON_BUILDER_CACHE = Join-Path $root '.cache\electron-builder' }
 if (-not $env:ELECTRON_BUILDER_BINARIES_MIRROR) { $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/' }
 if (-not $env:ELECTRON_MIRROR) { $env:ELECTRON_MIRROR = 'https://npmmirror.com/mirrors/electron/' }
