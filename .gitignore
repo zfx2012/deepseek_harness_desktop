@@ -16,3 +16,10 @@ dist/
 *.log
 .dist-out.txt
 .bundle-out.txt
+.verify-*.txt
+.upd-*.txt
+.scope-*.txt
+.final-*.txt
+.err-smoke-*.txt
+.dev-smoke-*.txt
+.pkg-smoke-*.txt

@@ -1,1 +1,0 @@
-[dsh-desktop] whenReady, electron 43.4.0 chrome 150.0.7871.224
