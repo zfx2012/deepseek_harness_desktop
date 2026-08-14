@@ -2,7 +2,7 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 Web GUI 打包成 Windows 桌面应用。
 
-> 项目状态与发布就绪度详见 [EVALUATION.md](./EVALUATION.md)（重新评估报告 v3）；历史问题清单与修复记录见 [AUDIT.md](./AUDIT.md)。
+> 项目状态与发布就绪度详见 [EVALUATION.md](./EVALUATION.md)（重新评估报告 v3）；第二轮全面审计见 [AUDIT-v2.md](./AUDIT-v2.md)；历史问题清单与修复记录见 [AUDIT.md](./AUDIT.md)。
 
 - 主进程自动 spawn `dsh web` 服务器（子进程），就绪后原生窗口加载 GUI
 - 生命周期管理：退出时杀进程树（`taskkill /T /F`）、崩溃自动重启（可关闭）、单实例锁
