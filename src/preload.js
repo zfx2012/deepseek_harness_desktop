@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('dsh', {
   getBundleInfo: () => ipcRenderer.invoke('dsh:get-bundle-info'),
   checkHarnessUpdate: () => ipcRenderer.invoke('dsh:check-harness-update'),
   updateHarness: (version) => ipcRenderer.invoke('dsh:update-harness', version),
+  onUpdateProgress: (cb) => {
+    const listener = (_event, text) => cb(text)
+    ipcRenderer.on('dsh:update-progress', listener)
+    return () => ipcRenderer.removeListener('dsh:update-progress', listener)
+  },
 
   // control
   restartServer: () => ipcRenderer.invoke('dsh:restart-server'),

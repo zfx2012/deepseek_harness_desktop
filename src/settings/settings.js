@@ -184,7 +184,9 @@ updateNowBtn.addEventListener('click', async () => {
   try {
     const result = await window.dsh.updateHarness(pendingVersion)
     if (result.ok) {
-      updateStatus.textContent = `内核已更新到 ${result.version}，服务器已用新内核重启。`
+      updateStatus.textContent = result.switched
+        ? `内核已更新到 ${result.version}。安装目录无写权限，已切换到用户副本并保存为新内核路径：${result.harnessPath}`
+        : `内核已更新到 ${result.version}，服务器已用新内核重启。`
       updateStatus.className = 'ok'
       pendingVersion = null
       updateNowBtn.classList.add('hidden')
@@ -206,6 +208,12 @@ updateNowBtn.addEventListener('click', async () => {
 
 openOfficial.addEventListener('click', () => {
   if (officialRepoUrl) window.dsh.openExternal(officialRepoUrl)
+})
+
+// Live progress from the child-process kernel update.
+window.dsh.onUpdateProgress((text) => {
+  updateStatus.textContent = text
+  updateStatus.className = 'ok'
 })
 
 load()

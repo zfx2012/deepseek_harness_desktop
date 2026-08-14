@@ -5,6 +5,7 @@ directories:
   output: release
 files:
   - src/**
+  - scripts/harness-update-runner.js
   - assets/icon.png
   - assets/icon.ico
   - package.json

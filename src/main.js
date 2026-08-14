@@ -13,12 +13,14 @@
  */
 
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell, nativeImage } = require('electron')
+const { spawn, spawnSync } = require('node:child_process')
+const readline = require('node:readline')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { SettingsStore } = require('./store')
 const { ServerManager, detectHarnessRoots, isHarness, resolveInstallRelative } = require('./server')
-const { compareVersions, fetchOfficialHarnessVersion, installHarnessUpdate } = require('./harness-update')
+const { compareVersions, fetchOfficialHarnessVersion } = require('./harness-update')
 
 // Auto-update is opt-in: set DSH_DESKTOP_UPDATE_URL to a generic feed URL
 // (e.g. https://example.com/releases/) to enable update checks in packaged
@@ -165,7 +167,10 @@ function openGuiWindow() {
     title: 'DeepSeek Harness',
     backgroundColor: '#0f1115',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      // Least privilege: the GUI window hosts the dsh web UI and gets NO
+      // preload bridge at all. Only the trusted settings page (main window)
+      // receives the control API — an XSS in the web UI cannot reach
+      // updateHarness/restartServer.
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -463,6 +468,78 @@ function readHarnessRootVersion(root) {
   return null
 }
 
+/** True when a probe file can be created and removed inside the directory. */
+function isWritableDir(dir) {
+  try {
+    const probe = path.join(dir, `.dsh-write-probe-${process.pid}`)
+    fs.writeFileSync(probe, '')
+    fs.rmSync(probe, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Run the kernel update in a CHILD process so the long npm install and the
+ * ~250MB file merges never freeze the UI. The runner reports progress on
+ * stdout (`[update] …`) and a final `[result]`/`[error]` line.
+ * @returns {Promise<{ ok: boolean, result?: object, error?: string }>}
+ */
+function runHarnessUpdateInChild(version, target, fresh, onProgress) {
+  return new Promise((resolve) => {
+    const runner = path.join(__dirname, '..', 'scripts', 'harness-update-runner.js')
+    const args = [runner, '--version', String(version), '--target', target]
+    if (fresh) args.push('--fresh')
+    let child
+    try {
+      // System Node when available, else this Electron binary as a Node runtime.
+      const probe = spawnSync('node', ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 5000 })
+      child = probe.status === 0
+        ? spawn('node', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+        : spawn(process.execPath, args, {
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+          })
+    } catch (error) {
+      resolve({ ok: false, error: error.message })
+      return
+    }
+    let settled = false
+    const settle = (outcome) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(outcome)
+    }
+    const rl = readline.createInterface({ input: child.stdout })
+    rl.on('line', (line) => {
+      if (line.startsWith('[update] ')) {
+        onProgress(line.slice('[update] '.length))
+      } else if (line.startsWith('[result] ')) {
+        try {
+          settle({ ok: true, result: JSON.parse(line.slice('[result] '.length)) })
+        } catch {
+          settle({ ok: false, error: `无法解析更新结果：${line}` })
+        }
+      } else if (line.startsWith('[error] ')) {
+        settle({ ok: false, error: line.slice('[error] '.length) })
+      }
+    })
+    child.on('error', (error) => settle({ ok: false, error: error.message }))
+    child.on('exit', (code) => {
+      if (!settled) settle({ ok: false, error: `更新进程异常退出（exit ${code}）` })
+    })
+    // The runner itself caps npm at 15 minutes; allow generous headroom here.
+    const timer = setTimeout(() => {
+      if (settled) return
+      try { child.kill() } catch { /* already gone */ }
+      settle({ ok: false, error: '内核更新超时（超过 20 分钟），已中止。' })
+    }, 20 * 60 * 1000)
+  })
+}
+
 // ── IPC ──────────────────────────────────────────────────────────────────────
 
 function registerIpc() {
@@ -497,6 +574,10 @@ function registerIpc() {
   })
   // Direct kernel update: install the published version into the harness the
   // app actually runs (deploy layout only — source checkouts are untouched).
+  // Per-machine installs under C:\Program Files are read-only for normal
+  // users, so an unwritable target transparently falls back to a writable
+  // per-user copy under userData; the setting is then persisted so future
+  // updates keep hitting that copy.
   ipcMain.handle('dsh:update-harness', async (_event, version) => {
     const effective = effectiveSettings()
     const targetPath = resolveHarnessPath(effective.harnessPath)
@@ -508,23 +589,32 @@ function registerIpc() {
     if (fs.existsSync(path.join(target, 'apps', 'cli', 'lib', 'bin.js'))) {
       return { ok: false, error: '当前 harness 是源码 checkout，无法直接更新；请改指向内置内核目录（安装目录\\resources\\harness）。' }
     }
+    const writable = isWritableDir(target)
+    let installTarget = target
+    let fresh = false
+    let switched = false
+    if (!writable) {
+      installTarget = path.join(app.getPath('userData'), 'harness-current')
+      fresh = !fs.existsSync(path.join(installTarget, 'lib', 'bin.js'))
+      switched = true
+    }
     server.stop() // native modules lock files on Windows while the server runs
     try {
-      const result = await installHarnessUpdate(String(version), target)
-      if (!result.ok) return result
+      const outcome = await runHarnessUpdateInChild(String(version), installTarget, fresh, (text) => {
+        sendToWindow(mainWindow, 'dsh:update-progress', String(text))
+      })
+      if (!outcome.ok) return { ok: false, error: outcome.error }
+      const result = outcome.result
+      if (switched) {
+        // Persist the per-user copy so the next boot (and next update) uses it.
+        settingsStore.set({ harnessPath: installTarget })
+      }
       pendingGuiOpen = true
       server.start({ quiet: true })
-      return { ok: true, version: result.version, packageCount: result.packageCount }
+      return { ok: true, version: result.version, packageCount: result.packageCount, harnessPath: installTarget, switched }
     } catch (error) {
       server.start({ quiet: true }) // resume with the old kernel
-      const msg = error.message
-      if (/EPERM|EACCES|permission denied/i.test(msg)) {
-        return {
-          ok: false,
-          error: `${msg}。安装目录无写权限（每机器安装在 C:\\Program Files 下）——请以管理员身份运行应用后再更新，或在设置中把 harness 路径指向可写目录。`,
-        }
-      }
-      return { ok: false, error: msg }
+      return { ok: false, error: error.message }
     }
   })
   ipcMain.handle('dsh:get-settings', () => effectiveSettings())

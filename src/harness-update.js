@@ -117,9 +117,11 @@ function mergeDir(src, dst, exclude = new Set()) {
  *
  *   1. `npm install @deepseek-ai/dsh@<version>` into a temp stage
  *      (npm hoists the full dependency closure, incl. dsh-web-app);
- *   2. merge the package's own files (lib/, package.json, …) onto the root;
- *   3. merge the dependency closure into <root>/node_modules;
- *   4. rewrite manifest.json so the "built-in" version display stays true.
+ *   2. materialize the COMPLETE new tree (package files + dependency
+ *      closure + manifest.json) in a sibling temp directory;
+ *   3. atomically swap it into place with two same-volume renames — the old
+ *      tree stays untouched until the new one is fully built, so a mid-merge
+ *      failure can never leave a mixed old/new tree.
  *
  * The target must be a deploy layout (lib/bin.js), NOT a source checkout —
  * replacing files under a checkout would leave a mixed tree. The running
@@ -191,79 +193,76 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
       throw new Error('下载的 @deepseek-ai/dsh 缺少 lib/bin.js，更新已中止。')
     }
 
-    // 2. the package's own files replace the root-level ones (node_modules and
-    //    manifest.json are handled separately and never clobbered). Stale root
-    //    files that no longer ship in the package are removed.
-    mergeDir(pkg, targetRoot, new Set(['node_modules']))
-    {
-      const pkgEntries = new Set(fs.readdirSync(pkg))
-      const keep = new Set(['node_modules', 'manifest.json'])
-      for (const entry of fs.readdirSync(targetRoot)) {
-        if (!pkgEntries.has(entry) && !keep.has(entry)) {
-          fs.rmSync(path.join(targetRoot, entry), { recursive: true, force: true })
+    // Build the COMPLETE new tree in a sibling temp directory, then swap it
+    // into place with two same-volume renames. The old tree stays untouched
+    // until the new one is fully materialized — a failure at any merge step
+    // can never leave a half-old/half-new mixed tree behind.
+    const temp = path.join(path.dirname(targetRoot), `.dsh-harness-new-${process.pid}-${Date.now()}`)
+    const backup = `${targetRoot}.old-${process.pid}-${Date.now()}`
+    fs.mkdirSync(temp, { recursive: true })
+    try {
+      // 2. the package's own files form the new root (node_modules handled next).
+      mergeDir(pkg, temp, new Set(['node_modules']))
+      // 3. dependency closure: hoisted top level (minus the package itself)
+      //    plus any nested conflict copies under the package.
+      const tempNm = path.join(temp, 'node_modules')
+      const newNm = path.join(stage, 'node_modules')
+      fs.mkdirSync(tempNm, { recursive: true })
+      for (const entry of fs.readdirSync(newNm)) {
+        if (entry === '.bin' || entry === '.package-lock.json' || entry === 'package-lock.json') continue
+        if (entry === '@deepseek-ai' && fs.existsSync(path.join(newNm, entry, 'dsh'))) {
+          for (const child of fs.readdirSync(path.join(newNm, entry))) {
+            if (child === 'dsh') continue
+            mergeDir(path.join(newNm, entry, child), path.join(tempNm, entry, child))
+          }
+        } else {
+          mergeDir(path.join(newNm, entry), path.join(tempNm, entry))
         }
       }
-    }
-    // 3. replace the dependency closure with the freshly installed one. The
-    //    old tree is moved aside first so a mid-merge failure can roll back
-    //    (fresh bundles have nothing to preserve).
-    {
-      const targetNm = path.join(targetRoot, 'node_modules')
-      const backup = `${targetNm}.bak`
-      const hadOld = fs.existsSync(targetNm)
+      mergeDir(path.join(pkg, 'node_modules'), tempNm)
+
+      // 4. provenance manifest, mirroring scripts/build-closure.mjs.
+      let pkgJson = {}
+      try {
+        pkgJson = JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8'))
+      } catch { /* keep {} */ }
+      const count = fs.readdirSync(tempNm).length
+      fs.writeFileSync(
+        path.join(temp, 'manifest.json'),
+        JSON.stringify({
+          name: 'dsh-harness-bundle',
+          harnessCheckout: 'updated by desktop app',
+          harnessVersion: pkgJson.version ?? ver,
+          builtAt: new Date().toISOString(),
+          node: process.version,
+          flattened: true,
+          packageCount: count,
+          updatedBy: 'dsh-desktop',
+        }, null, 2) + '\n',
+      )
+
+      // 5. atomic swap: old tree moves aside, new tree takes its name. If the
+      //    second rename fails, the old tree is restored.
+      const hadOld = fs.existsSync(targetRoot)
       if (hadOld) {
         fs.rmSync(backup, { recursive: true, force: true })
-        fs.renameSync(targetNm, backup)
+        fs.renameSync(targetRoot, backup)
       }
       try {
-        fs.mkdirSync(targetNm, { recursive: true })
-        // Hoisted closure (everything except the installed package itself,
-        // which lives at the root after step 2).
-        const newNm = path.join(stage, 'node_modules')
-        for (const entry of fs.readdirSync(newNm)) {
-          if (entry === '.bin' || entry === '.package-lock.json' || entry === 'package-lock.json') continue
-          if (entry === '@deepseek-ai' && fs.existsSync(path.join(newNm, entry, 'dsh'))) {
-            for (const child of fs.readdirSync(path.join(newNm, entry))) {
-              if (child === 'dsh') continue
-              mergeDir(path.join(newNm, entry, child), path.join(targetNm, entry, child))
-            }
-          } else {
-            mergeDir(path.join(newNm, entry), path.join(targetNm, entry))
-          }
-        }
-        // Nested conflict copies under the installed package: additive.
-        mergeDir(path.join(pkg, 'node_modules'), targetNm)
-        if (hadOld) fs.rmSync(backup, { recursive: true, force: true })
+        fs.renameSync(temp, targetRoot)
       } catch (error) {
-        fs.rmSync(targetNm, { recursive: true, force: true })
-        if (hadOld) fs.renameSync(backup, targetNm) // roll back to the old closure
+        if (hadOld) fs.renameSync(backup, targetRoot) // roll back to the old tree
         throw error
       }
+      if (hadOld) {
+        try { fs.rmSync(backup, { recursive: true, force: true }) } catch { /* leftover backup is harmless */ }
+      }
+      log(`内核已更新到 ${pkgJson.version ?? ver}。`)
+      return { ok: true, version: pkgJson.version ?? ver, packageCount: count }
+    } catch (error) {
+      try { fs.rmSync(temp, { recursive: true, force: true }) } catch { /* best effort */ }
+      throw error
     }
-
-    // 4. provenance manifest, mirroring scripts/build-closure.mjs.
-    let pkgJson = {}
-    try {
-      pkgJson = JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8'))
-    } catch { /* keep {} */ }
-    const count = fs.existsSync(path.join(targetRoot, 'node_modules'))
-      ? fs.readdirSync(path.join(targetRoot, 'node_modules')).length
-      : 0
-    fs.writeFileSync(
-      path.join(targetRoot, 'manifest.json'),
-      JSON.stringify({
-        name: 'dsh-harness-bundle',
-        harnessCheckout: 'updated by desktop app',
-        harnessVersion: pkgJson.version ?? ver,
-        builtAt: new Date().toISOString(),
-        node: process.version,
-        flattened: true,
-        packageCount: count,
-        updatedBy: 'dsh-desktop',
-      }, null, 2) + '\n',
-    )
-    log(`内核已更新到 ${pkgJson.version ?? ver}。`)
-    return { ok: true, version: pkgJson.version ?? ver, packageCount: count }
   } finally {
     // Temp cleanup is best-effort: antivirus/indexers can briefly lock the
     // stage dir on Windows — a failed cleanup must never mask a successful
