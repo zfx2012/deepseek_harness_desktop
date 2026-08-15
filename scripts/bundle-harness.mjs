@@ -135,6 +135,7 @@ const requested = EXPLICIT_VERSION
 
 if (binExists && !FORCE && (!requested || requested === manifestVersion)) {
   console.log(`harness-deploy/ already bundled (${manifestVersion ?? '?'}); use --force to rebuild: ${OUT}`)
+  execFileSync(process.execPath, ['scripts/patch-harness-jsonl.mjs'], { cwd: ROOT, stdio: 'inherit' })
   process.exit(0)
 }
 
@@ -144,6 +145,7 @@ if (explicitCheckout) {
     process.exit(1)
   }
   await bundleFromCheckout(explicitCheckout)
+  execFileSync(process.execPath, ['scripts/patch-harness-jsonl.mjs'], { cwd: ROOT, stdio: 'inherit' })
   process.exit(0)
 }
 
@@ -164,3 +166,4 @@ if (!version) {
 }
 
 await bundleFromNpm(version)
+execFileSync(process.execPath, ['scripts/patch-harness-jsonl.mjs'], { cwd: ROOT, stdio: 'inherit' })

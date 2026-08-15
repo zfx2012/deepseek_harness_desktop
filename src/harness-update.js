@@ -18,6 +18,7 @@ const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { patchHarnessJsonl } = require('./harness-jsonl-patch')
 
 const OFFICIAL_REPO_URL = 'https://github.com/deepseek-ai/deepseek-harness'
 const NPM_REGISTRY_URL = 'https://registry.npmjs.org/@deepseek-ai/dsh'
@@ -248,6 +249,7 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
       if (fs.existsSync(lock)) {
         fs.copyFileSync(lock, path.join(temp, 'package-lock.json'))
       }
+        patchHarnessJsonl(temp)
 
       // 5. atomic swap: old tree moves aside, new tree takes its name. If the
       //    second rename fails, the old tree is restored (a failing rollback
@@ -272,6 +274,7 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
       if (hadOld) {
         try { fs.rmSync(backup, { recursive: true, force: true }) } catch { /* leftover backup is harmless */ }
       }
+        
       log(`内核已更新到 ${pkgJson.version ?? ver}。`)
       return { ok: true, version: pkgJson.version ?? ver, packageCount: count }
     } catch (error) {

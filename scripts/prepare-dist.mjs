@@ -77,3 +77,9 @@ if (process.argv.includes('--skip-bundle')) {
   execFileSync(process.execPath, bundleArgs, { cwd: ROOT, stdio: 'inherit' })
   validateBundle()
 }
+
+// Apply the local resilience patch to the generated JSONL persistence backend.
+// This is a tracked build step because harness-deploy/ itself is gitignored.
+if (existsSync(path.join(OUT, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl'))) {
+  execFileSync(process.execPath, ['scripts/patch-harness-jsonl.mjs'], { cwd: ROOT, stdio: 'inherit' })
+}
