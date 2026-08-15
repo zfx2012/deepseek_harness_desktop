@@ -16,6 +16,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
+import { request as httpsRequest } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -81,16 +82,53 @@ function bodyText() {
 }
 
 async function apiJson(url, options, token) {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `token ${token}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'dsh-desktop-publish',
-      ...(options?.headers ?? {}),
-    },
+  const { method = 'GET', headers = {}, body } = options ?? {}
+  const allHeaders = {
+    Authorization: `token ${token}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'dsh-desktop-publish',
+    ...headers,
+  }
+  if (body !== undefined && allHeaders['Content-Length'] === undefined) {
+    allHeaders['Content-Length'] = String(Buffer.byteLength(body))
+  }
+
+  return new Promise((resolve, reject) => {
+    const u = new URL(url)
+    const req = httpsRequest(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || undefined,
+        path: u.pathname + u.search,
+        method,
+        headers: allHeaders,
+        // GitHub large-asset uploads can take a while on slow connections.
+        // Node's https has no aggressive default header timeout like undici.
+        timeout: 15 * 60 * 1000,
+      },
+      (res) => {
+        const chunks = []
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8')
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            headers: res.headers,
+            text: async () => text,
+            json: async () => JSON.parse(text),
+          })
+        })
+      },
+    )
+    req.on('timeout', () => {
+      req.destroy(new Error(`GitHub request timed out after 15 minutes: ${url}`))
+    })
+    req.on('error', reject)
+    if (body !== undefined) req.write(body)
+    req.end()
   })
-  return res
 }
 
 async function requireOk(res) {
