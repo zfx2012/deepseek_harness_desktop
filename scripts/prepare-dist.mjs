@@ -58,6 +58,12 @@ function validateBundle() {
       // probe missing: the required-list check above covers fatal absence
     }
   }
+  // A checkout-layout bundle (apps/cli/lib/bin.js) cannot be replaced by the
+  // in-app kernel update, which only supports deploy layout (lib/bin.js).
+  if (!existsSync(path.join(OUT, 'lib', 'bin.js')) && existsSync(path.join(OUT, 'apps', 'cli', 'lib', 'bin.js'))) {
+    console.warn('harness-deploy: bundled kernel is a checkout layout — the in-app "更新内核" will refuse it.')
+    console.warn('               rebuild without --harness to bundle the official npm channel (deploy layout).')
+  }
   console.log('harness-deploy: bundle validation passed')
 }
 

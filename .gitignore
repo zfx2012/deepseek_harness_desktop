@@ -8,3 +8,4 @@ harness-deploy/
 .verify-*/
 release/
 *.log
+.npm-cache/

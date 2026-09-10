@@ -115,6 +115,10 @@ async function bundleFromCheckout(root) {
     cwd: ROOT,
     stdio: 'inherit',
   })
+  log('')
+  log('警告：checkout 布局的内核（apps/cli/lib/bin.js）无法在应用内一键更新。')
+  log('      若要保留"更新内核"功能，请不带 --harness 打包（默认走官方 npm 渠道，产出 deploy 布局）。')
+  log('')
 }
 
 // ── npm channel (default): published @deepseek-ai/dsh deploy closure ────────

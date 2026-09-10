@@ -167,6 +167,16 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
 
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-update-'))
   try {
+    // Preflight: the update shells out to npm, so a machine without Node.js
+    // would otherwise fail deep inside the install with an opaque spawn error.
+    const probe = runNpm(['--version'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+    if (!probe || probe.status !== 0) {
+      const detail = probe && probe.error ? `（${probe.error.code || probe.error.message}）` : ''
+      throw new Error(
+        `未检测到可用的 npm${detail}。更新内核需要系统安装 Node.js（含 npm）；`
+        + '也可以改用桌面端新版安装包来更新内置内核。',
+      )
+    }
     // Anchor npm to the stage: without a package.json npm walks up to the
     // nearest project root (or, from a temp dir, ends up installing into the
     // user's HOME directory). A minimal manifest keeps everything in the stage.

@@ -20,6 +20,7 @@ const {
 function fakeNpmInstall(logs = []) {
   return (cmd, args, opts) => {
     logs.push([cmd, args])
+    if (args[0] === '--version') return { status: 0, stdout: '10.0.0\n', stderr: '' }
     assert.equal(args[0], 'install')
     assert.match(args[1], /^@deepseek-ai\/dsh@\d+\.\d+\.\d+/)
     const stage = opts.cwd
@@ -142,9 +143,24 @@ test('installHarnessUpdate refuses non-deploy targets and npm failures', async (
   makeDeployHarness(target)
   await assert.rejects(
     installHarnessUpdate('1.2.3', target, {
-      spawnImpl: () => ({ status: 1, stdout: '', stderr: 'ETARGET no matching version' }),
+      spawnImpl: (cmd, args) => (args[0] === '--version'
+        ? { status: 0, stdout: '10.0.0\n', stderr: '' }
+        : { status: 1, stdout: '', stderr: 'ETARGET no matching version' }),
     }),
     /npm install 失败（exit 1）/,
+  )
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('installHarnessUpdate reports a missing npm with an actionable message', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-upd-test-'))
+  const target = path.join(tmp, 'harness')
+  makeDeployHarness(target)
+  await assert.rejects(
+    installHarnessUpdate('1.2.3', target, {
+      spawnImpl: () => ({ status: null, error: Object.assign(new Error('not found'), { code: 'ENOENT' }) }),
+    }),
+    /未检测到可用的 npm/,
   )
   fs.rmSync(tmp, { recursive: true, force: true })
 })
@@ -169,6 +185,7 @@ test('installHarnessUpdate does not fall back to cmd.exe on timeouts', async () 
   makeDeployHarness(target)
   const calls = []
   const spawnImpl = (cmd, args) => {
+    if (args[0] === '--version') return { status: 0, stdout: '10.0.0\n', stderr: '' }
     calls.push(cmd)
     const err = new Error('spawnSync ETIMEDOUT')
     err.code = 'ETIMEDOUT'
@@ -206,6 +223,7 @@ test('installHarnessUpdate falls back to cmd.exe when .cmd spawn is blocked', as
   const calls = []
   const spawnImpl = (cmd, args, opts) => {
     calls.push([cmd, args])
+    if (args[0] === '--version') return { status: 0, stdout: '10.0.0\n', stderr: '' }
     if (cmd === 'npm.cmd') {
       const err = new Error('spawnSync npm.cmd EINVAL')
       err.code = 'EINVAL'
@@ -224,10 +242,12 @@ test('installHarnessUpdate falls back to cmd.exe when .cmd spawn is blocked', as
   }
   const result = await installHarnessUpdate('1.2.3', target, { npmCommand: 'npm.cmd', spawnImpl })
   assert.equal(result.ok, true)
-  assert.equal(calls[0][0], 'npm.cmd')
-  assert.equal(calls[1][0], 'cmd.exe')
+  // calls[0] is the --version preflight; the install then retries via cmd.exe.
+  assert.equal(calls[0][1][0], '--version')
+  assert.equal(calls[1][0], 'npm.cmd')
+  assert.equal(calls[2][0], 'cmd.exe')
   // cmd.exe /c must receive the npm command itself as the first token.
-  assert.deepEqual(calls[1][1].slice(0, 5), ['/d', '/s', '/c', 'npm.cmd', 'install'])
+  assert.deepEqual(calls[2][1].slice(0, 5), ['/d', '/s', '/c', 'npm.cmd', 'install'])
   assert.equal(fs.readFileSync(path.join(target, 'lib', 'bin.js'), 'utf8'), '// new kernel\n')
   fs.rmSync(tmp, { recursive: true, force: true })
 })

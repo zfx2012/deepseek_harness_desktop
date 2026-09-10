@@ -259,6 +259,11 @@ class ServerManager {
     const args = [bin, 'web']
     // Always pass an explicit port: 0 = OS-assigned free port (no conflicts).
     args.push('--port', String(port > 0 ? port : 0))
+    // Newer harness builds open the system browser on boot; the desktop app
+    // hosts the GUI itself, so that would spawn a second, unmanaged window.
+    // Older kernels reject the unknown flag, so it is only passed when the
+    // installed kernel actually supports it.
+    if (this.supportsNoOpen()) args.push('--no-open')
 
     const home = this.settings.get('dshHome') || this.defaults.dshHome || ''
     const cwd = os.homedir()
@@ -368,6 +373,33 @@ class ServerManager {
     }, 90000)
 
     this.startPolling()
+  }
+
+  /**
+   * True when the installed kernel understands `--no-open` (added in newer
+   * builds; older kernels abort on the unknown flag). Detected once by reading
+   * the web-app startup module and cached for the process lifetime.
+   */
+  supportsNoOpen() {
+    if (this.noOpenSupport !== undefined) return this.noOpenSupport
+    let support = false
+    try {
+      const candidates = [
+        path.join(this.harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'startup.js'),
+        path.join(this.harnessRoot, 'apps', 'cli', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'startup.js'),
+      ]
+      support = candidates.some((file) => {
+        try {
+          return fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('no-open')
+        } catch {
+          return false
+        }
+      })
+    } catch {
+      support = false
+    }
+    this.noOpenSupport = support
+    return support
   }
 
   /** Current log file size (0 when absent). */

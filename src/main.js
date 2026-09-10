@@ -129,6 +129,20 @@ function isAllowedLocalUrl(raw) {
 }
 
 /**
+ * True when two URLs share an origin. The GUI entry URL carries a one-shot
+ * `?token=` that the server answers with a 303 to `/`, so the window's final
+ * URL never equals the readiness URL textually — origin comparison is the
+ * only stable check.
+ */
+function sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
+
+/**
  * The ONE window: it hosts the dsh Web GUI (the main interface) and can be
  * switched to the settings page in place. The preload bridge is exposed by
  * preload.js only on the file:// settings page — the http:// GUI never gets
@@ -733,7 +747,11 @@ function runSmoke() {
     server.dispose()
     app.exit(ok ? 0 : 1)
   }
-  const timer = setTimeout(() => finish(false, 'SMOKE_FAIL timeout'), 90000)
+  const timer = setTimeout(() => {
+    const s = server.state
+    const winUrl = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getURL() : '(no window)'
+    finish(false, `SMOKE_FAIL timeout (phase=${s.phase} url=${s.url || '-'} window=${winUrl})`)
+  }, 90000)
   const interval = setInterval(check, 500)
 
   async function check() {
@@ -782,8 +800,9 @@ function runSmoke() {
       }
     }
     // The MAIN window is the GUI now — it navigates automatically on ready.
+    // Compare origins: the ready URL's ?token= is answered with a 303 to `/`.
     const wc = mainWindow.webContents
-    if (!wc.isLoading() && wc.getURL().startsWith(state.url)) {
+    if (!wc.isLoading() && sameOrigin(wc.getURL(), state.url)) {
       finish(true, `SMOKE_OK ${state.url} harnessSource=${state.harnessSource}`)
     }
   }
