@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DeepSeek Harness Desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Desktop shell for the DeepSeek Harness Web GUI: spawns the dsh web server and hosts it in a native window.",
   "author": {
     "name": "DeepSeek Harness Desktop Contributors"

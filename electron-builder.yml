@@ -14,6 +14,13 @@ files:
 # node_modules directory, which would strip the harness dependency tree.
 afterPack: scripts/after-pack.cjs
 asar: true
+# The kernel-update runner and its modules MUST be outside the asar archive:
+# the update runs them in a child process, and neither system Node nor
+# Electron's ELECTRON_RUN_AS_NODE mode can read inside an asar.
+asarUnpack:
+  - scripts/harness-update-runner.js
+  - src/harness-update.js
+  - src/harness-jsonl-patch.js
 # Auto-update feed (generic). Replace the placeholder with the real static
 # hosting URL; `npm run dist` then emits latest.yml next to the installers.
 # The app only checks for updates when DSH_DESKTOP_UPDATE_URL is set at runtime

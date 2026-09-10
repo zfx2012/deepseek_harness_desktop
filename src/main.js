@@ -520,6 +520,17 @@ function isWritableDir(dir) {
 }
 
 /**
+ * Redirect a bundled path out of app.asar. Child processes (system Node, or
+ * this binary as ELECTRON_RUN_AS_NODE) cannot read inside an asar archive, so
+ * anything spawned rather than required by the main process must live in
+ * app.asar.unpacked (see asarUnpack in electron-builder.yml).
+ */
+function unpackedPath(file) {
+  if (!app.isPackaged) return file
+  return file.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`)
+}
+
+/**
  * Run the kernel update in a CHILD process so the long npm install and the
  * ~250MB file merges never freeze the UI. The runner reports progress on
  * stdout (`[update] …`) and a final `[result]`/`[error]` line.
@@ -527,7 +538,7 @@ function isWritableDir(dir) {
  */
 function runHarnessUpdateInChild(version, target, fresh, onProgress) {
   return new Promise((resolve) => {
-    const runner = path.join(__dirname, '..', 'scripts', 'harness-update-runner.js')
+    const runner = unpackedPath(path.join(__dirname, '..', 'scripts', 'harness-update-runner.js'))
     const args = [runner, '--version', String(version), '--target', target]
     if (fresh) args.push('--fresh')
     let child
@@ -553,6 +564,12 @@ function runHarnessUpdateInChild(version, target, fresh, onProgress) {
       resolve(outcome)
     }
     const rl = readline.createInterface({ input: child.stdout })
+    // Keep the child's stderr: a crash before the line protocol starts (e.g. a
+    // path the runtime cannot read) would otherwise surface as a bare exit code.
+    let stderrTail = ''
+    child.stderr.on('data', (chunk) => {
+      stderrTail = (stderrTail + String(chunk)).slice(-2000)
+    })
     rl.on('line', (line) => {
       if (line.startsWith('[update] ')) {
         onProgress(line.slice('[update] '.length))
@@ -568,7 +585,9 @@ function runHarnessUpdateInChild(version, target, fresh, onProgress) {
     })
     child.on('error', (error) => settle({ ok: false, error: error.message }))
     child.on('exit', (code) => {
-      if (!settled) settle({ ok: false, error: `更新进程异常退出（exit ${code}）` })
+      if (settled) return
+      const detail = stderrTail.trim().split('\n').slice(-3).join(' ').trim()
+      settle({ ok: false, error: `更新进程异常退出（exit ${code}）${detail ? `：${detail}` : ''}` })
     })
     // The runner itself caps npm at 15 minutes; allow generous headroom here.
     const timer = setTimeout(() => {
