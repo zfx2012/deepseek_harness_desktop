@@ -308,3 +308,60 @@ test('rotateLog keeps two generations when the log outgrows the cap', () => {
   manager.dispose()
   fs.rmSync(tmp, { recursive: true, force: true })
 })
+
+// ── stale writer locks (upstream atomic-write defect) ────────────────────────
+
+test('cleanupStaleLock removes a lock whose holder is gone', () => {
+  const { manager, tmp } = makeManager()
+  const lock = path.join(tmp, 'node_modules.lock')
+  fs.writeFileSync(lock, '999999999\n') // not a live pid
+
+  assert.equal(manager.cleanupStaleLock(lock), true)
+  assert.equal(fs.existsSync(lock), false)
+  manager.dispose()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('cleanupStaleLock leaves a live holder alone', () => {
+  const { manager, tmp } = makeManager()
+  const lock = path.join(tmp, 'node_modules.lock')
+  fs.writeFileSync(lock, `${process.pid}\n`)
+
+  assert.equal(manager.cleanupStaleLock(lock), false)
+  assert.equal(fs.existsSync(lock), true, 'a live writer must keep its lock')
+  manager.dispose()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('cleanupStaleLock ignores empty locks until they are old enough', () => {
+  const { manager, tmp } = makeManager()
+  const lock = path.join(tmp, 'node_modules.lock')
+  fs.writeFileSync(lock, '')
+  assert.equal(manager.cleanupStaleLock(lock), false, 'a fresh empty lock may be mid-write')
+
+  const old = new Date(Date.now() - 10 * 60 * 1000)
+  fs.utimesSync(lock, old, old)
+  assert.equal(manager.cleanupStaleLock(lock), true, 'an aged empty lock is stale')
+  manager.dispose()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('a boot blocked by a stale lock is retried once after clearing it', async () => {
+  const { manager, spawned, tmp } = makeManager()
+  const nodeSpawns = () => spawned.filter((s) => s.args[0] === 'node').length
+  const lock = path.join(tmp, 'profiles', 'node_modules.lock')
+  fs.mkdirSync(path.dirname(lock), { recursive: true })
+  fs.writeFileSync(lock, '999999999\n')
+
+  manager.start()
+  assert.equal(nodeSpawns(), 1)
+  // The kernel reports the lock timeout, then dies.
+  fs.appendFileSync(manager.logFile, `Error: atomic-write: timed out waiting for the writer lock at ${lock}\n`)
+  spawned[0].child.emit('exit', 1, null)
+  await sleep(600)
+
+  assert.equal(fs.existsSync(lock), false, 'the stale lock must be cleared')
+  assert.equal(nodeSpawns(), 2, 'the boot must be retried after clearing the lock')
+  manager.dispose()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})

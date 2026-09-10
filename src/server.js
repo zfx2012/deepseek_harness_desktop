@@ -191,6 +191,8 @@ class ServerManager {
     this.pollTimer = null
     this.logTail = []
     this.filePos = 0
+    this.noOpenSupport = undefined
+    this.lockRecoveryDone = false
   }
 
   get state() {
@@ -272,7 +274,12 @@ class ServerManager {
     env.DSH_DESKTOP = '1'
     // Fresh DSH_HOME + symlink-less Windows: pre-heal the profile fallback so
     // the child never needs the SeCreateSymbolicLinkPrivilege.
-    this.preHealProfiles(home || path.join(os.homedir(), '.dsh'), this.harnessRoot)
+    const homeDir = home || path.join(os.homedir(), '.dsh')
+    this.preHealProfiles(homeDir, this.harnessRoot)
+    // The kernel's atomic-write helper leaves `<file>.lock` behind after a
+    // crash or a Windows delete failure and never checks liveness, so a stale
+    // lock would block this boot. Clear it when its holder is gone.
+    this.cleanupStaleLock(path.join(homeDir, 'profiles', 'node_modules.lock'))
 
     const launch = resolveNodeLaunch(this.spawnSyncImpl)
     this.log(`启动: ${launch.command} ${[...launch.args, ...args].join(' ')}  (cwd: ${cwd}${home ? `, DSH_HOME: ${home}` : ''})`)
@@ -280,6 +287,7 @@ class ServerManager {
     this.url = null
     this.stopping = false
     this.expectExit = false
+    this.lockRecoveryDone = false
     this.setState({ phase: 'starting', quiet })
 
     // Rotate an oversized log before appending this boot's output.
@@ -345,6 +353,20 @@ class ServerManager {
       this.stopPolling()
       if (this.stopping) return
       if (this.expectExit) return // replaced by a fresh start()
+      // Known upstream bug (atomic-write): a stale writer lock survives a crash
+      // and makes the next boot time out. Recover once by clearing it and
+      // restarting; a lock whose holder is still alive is left untouched.
+      if (!this.lockRecoveryDone) {
+        const hit = this.logTail.join('\n').match(/timed out waiting for the writer lock at (.+?\.lock)/)
+        if (hit) {
+          this.lockRecoveryDone = true
+          if (this.cleanupStaleLock(hit[1])) {
+            this.log('[server] 检测到残留写锁，已清理并重新启动…')
+            this.start({ quiet: true })
+            return
+          }
+        }
+      }
       if (this.phase === 'ready') {
         this.url = null
         if (this.settings.get('autoRestart') && !this.crashTimer) {
@@ -373,6 +395,42 @@ class ServerManager {
     }, 90000)
 
     this.startPolling()
+  }
+
+  /**
+   * Remove a STALE writer lock left behind by the kernel's atomic-write helper.
+   *
+   * That helper creates `<file>.lock` holding the writer's pid and performs no
+   * liveness check, so a lock surviving a crash (or a failed delete on Windows)
+   * blocks every later writer forever with "timed out waiting for the writer
+   * lock". A lock is removed only when its recorded pid is gone — a live holder
+   * is left untouched.
+   * @param {string} lockPath - absolute path of the `.lock` file.
+   * @returns {boolean} true when a stale lock was removed.
+   */
+  cleanupStaleLock(lockPath) {
+    try {
+      if (!fs.existsSync(lockPath)) return false
+      const raw = fs.readFileSync(lockPath, 'utf8').trim()
+      const pid = Number.parseInt(raw, 10)
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0) // signal 0: liveness probe only
+          return false // holder is alive — not ours to remove
+        } catch {
+          /* holder is gone: fall through and remove the stale lock */
+        }
+      } else {
+        // Empty or unparsable lock content: only stale once clearly old.
+        const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs
+        if (ageMs < 60000) return false
+      }
+      fs.rmSync(lockPath, { force: true })
+      this.log(`已清理残留的写锁：${lockPath}`)
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**
