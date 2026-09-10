@@ -84,6 +84,8 @@ let server
 let mainWindow = null
 let tray = null
 let isQuitting = false
+/** The kernel-update runner while an update is in flight (null otherwise). */
+let updateChild = null
 /** True while the single window is showing the settings page. */
 let settingsActive = false
 
@@ -456,13 +458,38 @@ app.whenReady().then(() => {
   if (SMOKE || SMOKE_BUNDLED || SMOKE_ERROR) {
     runSmoke()
   }
+  if (SMOKE_KERNEL_UPDATE) {
+    runSmokeKernelUpdate()
+  }
 })
 
 // Tray-resident app: clicking ✕ hides the window (the close handler in
 // createMainWindow preventDefaults it), so window-all-closed never fires for a
 // hidden window. Quitting is explicit — tray/menu 退出 — and disposes the
 // server child (process-tree kill), so a quit app never blocks reinstall.
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // A kernel update must not be abandoned halfway: the runner would keep
+  // swapping files after the app is gone. Ask, then cancel it explicitly.
+  if (updateChild && !isQuitting) {
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      buttons: ['继续更新', '中止更新并退出'],
+      defaultId: 0,
+      cancelId: 0,
+      title: '内核更新进行中',
+      message: '内核更新正在进行，退出会中止本次更新（已下载的临时文件会被清理）。',
+    })
+    if (choice === 0) {
+      event.preventDefault()
+      return
+    }
+    try {
+      spawnSync('taskkill', ['/pid', String(updateChild.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    } catch {
+      /* best effort */
+    }
+    updateChild = null
+  }
   isQuitting = true
   if (server) server.dispose()
   // A downloaded update installs on quit: hand over to electron-updater
@@ -556,11 +583,16 @@ function runHarnessUpdateInChild(version, target, fresh, onProgress) {
       resolve({ ok: false, error: error.message })
       return
     }
+    // Tracked so a quit during the update can cancel it instead of leaving an
+    // orphan runner that would swap the kernel halfway.
+    updateChild = child
     let settled = false
+    /** Stop tracking the child as "the running update" once it is done. */
     const settle = (outcome) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      if (updateChild === child) updateChild = null
       resolve(outcome)
     }
     const rl = readline.createInterface({ input: child.stdout })
@@ -600,6 +632,59 @@ function runHarnessUpdateInChild(version, target, fresh, onProgress) {
 
 // ── IPC ──────────────────────────────────────────────────────────────────────
 
+/**
+ * Perform a kernel update end to end: validate the version, resolve the target
+ * harness, stop the server, run the updater in a child process, then restart
+ * the kernel. Shared by the settings IPC and --smoke-kernel-update.
+ * @param {string} version - published @deepseek-ai/dsh version.
+ * @param {(text: string) => void} [onProgress] - progress sink.
+ * @returns {Promise<{ ok: boolean, error?: string, version?: string, packageCount?: number, harnessPath?: string, switched?: boolean }>}
+ */
+async function performHarnessUpdate(version, onProgress = () => {}) {
+  // Validate the version BEFORE stopping the server — an invalid value must
+  // not cost a needless stop/start round-trip.
+  const ver = String(version ?? '').trim()
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(ver)) {
+    return { ok: false, error: `无效的版本号: ${ver}` }
+  }
+  const effective = effectiveSettings()
+  const targetPath = resolveHarnessPath(effective.harnessPath)
+  const target = server.state.harnessRoot || (targetPath && isHarness(targetPath) ? targetPath : null)
+  if (!target) {
+    return { ok: false, error: '未找到可更新的 harness 目录。' }
+  }
+  if (fs.existsSync(path.join(target, 'apps', 'cli', 'lib', 'bin.js'))) {
+    return { ok: false, error: '当前 harness 是源码 checkout，无法直接更新；请改指向内置内核目录（安装目录\\resources\\harness）。' }
+  }
+  const writable = isWritableDir(target)
+  let installTarget = target
+  let fresh = false
+  let switched = false
+  if (!writable) {
+    installTarget = path.join(app.getPath('userData'), 'harness-current')
+    fresh = !fs.existsSync(path.join(installTarget, 'lib', 'bin.js'))
+    switched = true
+  }
+  server.stop() // native modules lock files on Windows while the server runs
+  try {
+    const outcome = await runHarnessUpdateInChild(ver, installTarget, fresh, onProgress)
+    if (!outcome.ok) throw new Error(outcome.error || '更新失败（未知错误）')
+    const result = outcome.result
+    if (switched) {
+      // Persist the per-user copy so the next boot (and next update) uses it.
+      settingsStore.set({ harnessPath: installTarget })
+    }
+    // Update done: return to the main interface once the server is ready.
+    settingsActive = false
+    server.start({ quiet: true })
+    return { ok: true, version: result.version, packageCount: result.packageCount, harnessPath: installTarget, switched }
+  } catch (error) {
+    // Resume with the old kernel; stay on the settings page to show the error.
+    server.start({ quiet: true })
+    return { ok: false, error: error.message }
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('dsh:get-state', () => server.state)
   ipcMain.handle('dsh:get-bundle-info', () => {
@@ -632,57 +717,12 @@ function registerIpc() {
   })
   // Direct kernel update: install the published version into the harness the
   // app actually runs (deploy layout only — source checkouts are untouched).
-  // Per-machine installs under C:\Program Files are read-only for normal
-  // users, so an unwritable target transparently falls back to a writable
-  // per-user copy under userData; the setting is then persisted so future
-  // updates keep hitting that copy.
-  ipcMain.handle('dsh:update-harness', async (_event, version) => {
-    // Validate the version BEFORE stopping the server — an invalid value must
-    // not cost a needless stop/start round-trip.
-    const ver = String(version ?? '').trim()
-    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(ver)) {
-      return { ok: false, error: `无效的版本号: ${ver}` }
-    }
-    const effective = effectiveSettings()
-    const targetPath = resolveHarnessPath(effective.harnessPath)
-    const target =
-      server.state.harnessRoot || (targetPath && isHarness(targetPath) ? targetPath : null)
-    if (!target) {
-      return { ok: false, error: '未找到可更新的 harness 目录。' }
-    }
-    if (fs.existsSync(path.join(target, 'apps', 'cli', 'lib', 'bin.js'))) {
-      return { ok: false, error: '当前 harness 是源码 checkout，无法直接更新；请改指向内置内核目录（安装目录\\resources\\harness）。' }
-    }
-    const writable = isWritableDir(target)
-    let installTarget = target
-    let fresh = false
-    let switched = false
-    if (!writable) {
-      installTarget = path.join(app.getPath('userData'), 'harness-current')
-      fresh = !fs.existsSync(path.join(installTarget, 'lib', 'bin.js'))
-      switched = true
-    }
-    server.stop() // native modules lock files on Windows while the server runs
-    try {
-      const outcome = await runHarnessUpdateInChild(ver, installTarget, fresh, (text) => {
-        sendToWindow(mainWindow, 'dsh:update-progress', String(text))
-      })
-      if (!outcome.ok) throw new Error(outcome.error || '更新失败（未知错误）')
-      const result = outcome.result
-      if (switched) {
-        // Persist the per-user copy so the next boot (and next update) uses it.
-        settingsStore.set({ harnessPath: installTarget })
-      }
-      // Update done: return to the main interface once the server is ready.
-      settingsActive = false
-      server.start({ quiet: true })
-      return { ok: true, version: result.version, packageCount: result.packageCount, harnessPath: installTarget, switched }
-    } catch (error) {
-      // Resume with the old kernel; stay on the settings page to show the error.
-      server.start({ quiet: true })
-      return { ok: false, error: error.message }
-    }
-  })
+  // Per-machine installs under Program Files are read-only for normal users,
+  // so an unwritable target transparently falls back to a writable per-user
+  // copy under userData; the setting is then persisted so future updates keep
+  // hitting that copy.
+  ipcMain.handle('dsh:update-harness', async (_event, version) =>
+    performHarnessUpdate(version, (text) => sendToWindow(mainWindow, 'dsh:update-progress', String(text))))
   ipcMain.handle('dsh:get-settings', () => effectiveSettings())
   ipcMain.handle('dsh:set-settings', (_event, partial) => {
     // Re-validate in the main process too — the renderer may be compromised.
@@ -728,6 +768,7 @@ function registerIpc() {
 const SMOKE_BUNDLED = process.argv.includes('--smoke-bundled')
 const SMOKE_ERROR = process.argv.includes('--smoke-error')
 const SMOKE_UPDATE = process.argv.includes('--smoke-update')
+const SMOKE_KERNEL_UPDATE = process.argv.includes('--smoke-kernel-update')
 
 /** Update-feed verification: expect DSH_DESKTOP_UPDATE_URL to offer DSH_DESKTOP_EXPECT_VERSION. */
 async function runSmokeUpdate() {
@@ -755,6 +796,63 @@ async function runSmokeUpdate() {
     console.log(`SMOKE_UPDATE_FAIL ${error.message}`)
     app.exit(1)
   }
+}
+
+/**
+ * End-to-end kernel-update verification (--smoke-kernel-update): wait for the
+ * bundled kernel to boot, run a REAL update through the same code path the
+ * settings page uses, then require the kernel to boot again. DSH_SMOKE_KERNEL_VERSION
+ * overrides the target version (defaults to the currently installed one).
+ */
+async function runSmokeKernelUpdate() {
+  const finish = (ok, message) => {
+    console.log(message)
+    server.dispose()
+    app.exit(ok ? 0 : 1)
+  }
+  const timer = setTimeout(() => finish(false, 'SMOKE_KERNEL_FAIL timeout'), 30 * 60 * 1000)
+  const waitReady = (timeoutMs) =>
+    new Promise((resolve) => {
+      const started = Date.now()
+      const poll = setInterval(() => {
+        if (server.state.phase === 'ready') {
+          clearInterval(poll)
+          resolve(true)
+        } else if (server.state.phase === 'error' || Date.now() - started > timeoutMs) {
+          clearInterval(poll)
+          resolve(false)
+        }
+      }, 500)
+    })
+
+  const firstReady = await waitReady(120000)
+  if (!firstReady) {
+    clearTimeout(timer)
+    return finish(false, `SMOKE_KERNEL_FAIL initial boot (${server.state.error || server.state.phase})`)
+  }
+  const current = readHarnessRootVersion(server.state.harnessRoot)
+  const version = process.env.DSH_SMOKE_KERNEL_VERSION || current
+  if (!version) {
+    clearTimeout(timer)
+    return finish(false, 'SMOKE_KERNEL_FAIL cannot determine the installed kernel version')
+  }
+  console.log(`SMOKE_KERNEL_INFO current=${current} installing=${version} target=${server.state.harnessRoot}`)
+
+  const outcome = await performHarnessUpdate(version, (text) => console.log(`[update] ${text}`))
+  if (!outcome.ok) {
+    clearTimeout(timer)
+    return finish(false, `SMOKE_KERNEL_FAIL update: ${outcome.error}`)
+  }
+  const rebooted = await waitReady(120000)
+  clearTimeout(timer)
+  if (!rebooted) {
+    return finish(false, `SMOKE_KERNEL_FAIL reboot (${server.state.error || server.state.phase})`)
+  }
+  const after = readHarnessRootVersion(server.state.harnessRoot)
+  finish(
+    true,
+    `SMOKE_KERNEL_OK version=${after} path=${server.state.harnessRoot} switched=${outcome.switched === true}`,
+  )
 }
 
 function runSmoke() {

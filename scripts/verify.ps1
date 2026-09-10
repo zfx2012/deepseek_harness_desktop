@@ -12,6 +12,7 @@
     5. error-path smoke     (packaged exe --smoke-error: invalid harness path -> error card)
     6. no-node smoke        (packaged exe with stripped PATH: ELECTRON_RUN_AS_NODE fallback)
     7. update-feed smoke    (packaged exe --smoke-update: discovers v0.2.0 from a local feed)
+    8. kernel-update smoke  (packaged exe --smoke-kernel-update: real npm install + swap + reboot)
 
   Any failure aborts with a non-zero exit code. Use from the repo root:
     pwsh scripts/verify.ps1
@@ -138,8 +139,17 @@ Invoke-Step 'update-feed smoke' {
   }
 }
 
+# 8. kernel-update smoke — the REAL "更新内核" path in a packaged build:
+# npm install -> atomic swap -> kernel reboot (also exercises the per-user
+# fallback when the install directory is read-only).
+$kernelHome = Join-Path $root '.verify-kernel-home'
+Invoke-Step 'kernel-update smoke (real npm install + atomic swap + reboot)' {
+  Run-Smoke -Label 'kernel' -SmokeArgs @('--smoke-kernel-update', '--disable-gpu') `
+    -ConfigJson $config -UserData $kernelHome
+}
+
 # cleanup
-Remove-Item -Recurse -Force $smokeHome, $errHome, $noNodeHome, $updateHome -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $smokeHome, $errHome, $noNodeHome, $updateHome, $kernelHome -ErrorAction SilentlyContinue
 Get-ChildItem $root -Filter '.verify-*-out.txt' -ErrorAction SilentlyContinue | Remove-Item -Force
 Get-ChildItem $root -Filter '.verify-*-err.txt' -ErrorAction SilentlyContinue | Remove-Item -Force
 

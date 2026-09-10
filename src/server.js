@@ -280,6 +280,7 @@ class ServerManager {
     // crash or a Windows delete failure and never checks liveness, so a stale
     // lock would block this boot. Clear it when its holder is gone.
     this.cleanupStaleLock(path.join(homeDir, 'profiles', 'node_modules.lock'))
+    this.cleanupUpdateLeftovers(this.harnessRoot)
 
     const launch = resolveNodeLaunch(this.spawnSyncImpl)
     this.log(`启动: ${launch.command} ${[...launch.args, ...args].join(' ')}  (cwd: ${cwd}${home ? `, DSH_HOME: ${home}` : ''})`)
@@ -435,29 +436,51 @@ class ServerManager {
 
   /**
    * True when the installed kernel understands `--no-open` (added in newer
-   * builds; older kernels abort on the unknown flag). Detected once by reading
-   * the web-app startup module and cached for the process lifetime.
+   * builds; older kernels abort on the unknown flag).
+   *
+   * Recomputed per boot — a kernel update or a harness-path change replaces the
+   * code behind the same directory, so a cached verdict would either spawn an
+   * unwanted browser or pass a flag the kernel rejects.
    */
   supportsNoOpen() {
-    if (this.noOpenSupport !== undefined) return this.noOpenSupport
-    let support = false
+    const candidates = [
+      path.join(this.harnessRoot ?? '', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'startup.js'),
+      path.join(this.harnessRoot ?? '', 'apps', 'cli', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'startup.js'),
+    ]
+    return candidates.some((file) => {
+      try {
+        return fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('no-open')
+      } catch {
+        return false
+      }
+    })
+  }
+
+  /**
+   * Remove leftovers from interrupted kernel updates next to the harness root:
+   * a failed merge leaves `.dsh-harness-new-*`, an interrupted swap can leave
+   * `<root>.old-*`. Only entries older than an hour are removed, so a running
+   * update is never disturbed.
+   */
+  cleanupUpdateLeftovers(harnessRoot) {
     try {
-      const candidates = [
-        path.join(this.harnessRoot, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'startup.js'),
-        path.join(this.harnessRoot, 'apps', 'cli', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'startup.js'),
-      ]
-      support = candidates.some((file) => {
+      const parent = path.dirname(harnessRoot)
+      const base = path.basename(harnessRoot)
+      const cutoff = Date.now() - 60 * 60 * 1000
+      for (const entry of fs.readdirSync(parent)) {
+        if (!entry.startsWith('.dsh-harness-new-') && !entry.startsWith(`${base}.old-`)) continue
+        const full = path.join(parent, entry)
         try {
-          return fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('no-open')
+          if (fs.statSync(full).mtimeMs > cutoff) continue
+          fs.rmSync(full, { recursive: true, force: true })
+          this.log(`已清理中断更新遗留的目录：${entry}`)
         } catch {
-          return false
+          /* locked or in use — leave it for a later boot */
         }
-      })
+      }
     } catch {
-      support = false
+      /* parent unreadable (dev paths) — nothing to clean */
     }
-    this.noOpenSupport = support
-    return support
   }
 
   /** Current log file size (0 when absent). */
