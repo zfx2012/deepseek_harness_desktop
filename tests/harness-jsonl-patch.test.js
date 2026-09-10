@@ -50,8 +50,10 @@ test('patchHarnessJsonl removes turn/end escalation and adds zstd logical-frame 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-jsonl-patch-'))
   const target = makeFakeHarness(tmp)
 
-  const changed = patchHarnessJsonl(tmp)
-  assert.equal(changed, true)
+  const result = patchHarnessJsonl(tmp)
+  assert.equal(result.changed, true)
+  assert.equal(result.applied, 3)
+  assert.equal(result.skipped, 0)
 
   const patched = fs.readFileSync(target, 'utf8')
   assert.ok(!patched.includes('throw this.issue'), 'turn/end after a gap must not hard-fail')
@@ -60,7 +62,9 @@ test('patchHarnessJsonl removes turn/end escalation and adds zstd logical-frame 
 
   // Idempotent: a second run must not modify the file again.
   const before = fs.readFileSync(target, 'utf8')
-  assert.equal(patchHarnessJsonl(tmp), false)
+  const second = patchHarnessJsonl(tmp)
+  assert.equal(second.changed, false)
+  assert.equal(second.skipped, 0)
   assert.equal(fs.readFileSync(target, 'utf8'), before)
 
   fs.rmSync(tmp, { recursive: true, force: true })
@@ -68,6 +72,32 @@ test('patchHarnessJsonl removes turn/end escalation and adds zstd logical-frame 
 
 test('patchHarnessJsonl skips missing backend', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-jsonl-patch-missing-'))
-  assert.equal(patchHarnessJsonl(tmp), false)
+  const result = patchHarnessJsonl(tmp)
+  assert.deepEqual(result, { changed: false, applied: 0, skipped: 0 })
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('patchHarnessJsonl skips drifted upstream code instead of failing', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-jsonl-patch-drift-'))
+  const target = path.join(
+    tmp,
+    'node_modules',
+    '@deepseek-ai',
+    'dsh-session-persistence-jsonl',
+    'lib',
+    'index.js',
+  )
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  // Only the first snippet is still present; the rest were refactored upstream.
+  fs.writeFileSync(target, OLD_SNIPPETS[0], 'utf8')
+
+  const messages = []
+  const result = patchHarnessJsonl(tmp, { log: (m) => messages.push(m) })
+
+  assert.equal(result.changed, true, 'the still-matching snippet is applied')
+  assert.equal(result.applied, 1)
+  assert.equal(result.skipped, 2, 'drifted snippets are skipped, never fatal')
+  assert.equal(messages.length, 2)
+  assert.ok(messages.every((m) => m.includes('已跳过')))
   fs.rmSync(tmp, { recursive: true, force: true })
 })

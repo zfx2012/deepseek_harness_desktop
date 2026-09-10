@@ -259,7 +259,12 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
       if (fs.existsSync(lock)) {
         fs.copyFileSync(lock, path.join(temp, 'package-lock.json'))
       }
-        patchHarnessJsonl(temp)
+      // Local resilience enhancement — never a gate: snippets that no longer
+      // match upstream code are skipped and the update continues.
+      const patch = patchHarnessJsonl(temp, { log })
+      if (patch.skipped > 0) {
+        log(`注意：${patch.skipped} 项会话日志韧性补丁未适用（内核代码已变化），更新继续。`)
+      }
 
       // 5. atomic swap: old tree moves aside, new tree takes its name. If the
       //    second rename fails, the old tree is restored (a failing rollback

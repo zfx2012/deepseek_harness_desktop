@@ -28,6 +28,7 @@ const replacements = [
   //    because a later line contains a turn/end. The scanner already keeps
   //    only the valid contiguous prefix; the coordinator will close the turn.
   {
+    id: 'turn/end escalation guard',
     from:
       '\t\tif (this.issue !== void 0) {\n' +
       '\t\t\tif (decoded.some((event) => event.type === "turn/end")) throw this.issue;\n' +
@@ -40,6 +41,7 @@ const replacements = [
   },
   // 2. Same for the seq-gap branch.
   {
+    id: 'seq-gap escalation guard',
     from:
       '\t\t\t\tthis.issue = /* @__PURE__ */ new Error(`corrupt session log: seq gap in committed region at line ${this.eventLine} (expected ${expected}, got ${event.seq})`);\n' +
       '\t\t\t\tif (decoded.some((candidate) => candidate.type === "turn/end")) throw this.issue;\n' +
@@ -53,6 +55,7 @@ const replacements = [
   //    later frames) and carry the valid events already read from that frame
   //    as recoveredEvents so commitRepair can re-append them after truncation.
   {
+    id: 'zstd logical-frame recovery',
     from:
       '\t\t\tconst scanner = new SessionLogScanner(headerFrame.value);\n' +
       '\t\t\tlet remainingFrames = frames.length - 1;\n' +
@@ -115,31 +118,44 @@ const replacements = [
 
 /**
  * Apply the JSONL corruption-recovery patch to a harness root.
+ *
+ * This is a local resilience enhancement, never a requirement: upstream code
+ * changes are expected, so a snippet that no longer matches is SKIPPED (with a
+ * log line) instead of failing the caller. A kernel update must never be
+ * blocked by a stale patch anchor.
+ *
  * @param {string} harnessRoot - deploy-layout harness root.
- * @returns {boolean} true when a file was modified.
+ * @param {object} [deps] - { log? } progress sink.
+ * @returns {{ changed: boolean, applied: number, skipped: number }}
  */
-function patchHarnessJsonl(harnessRoot) {
+function patchHarnessJsonl(harnessRoot, { log = () => {} } = {}) {
   const target = path.join(harnessRoot, ...TARGET_REL)
-  if (!fs.existsSync(target)) return false
+  if (!fs.existsSync(target)) return { changed: false, applied: 0, skipped: 0 }
 
   let source = fs.readFileSync(target, 'utf8')
   let changed = false
-  for (const { from, to } of replacements) {
+  let applied = 0
+  let skipped = 0
+  for (const { id, from, to } of replacements) {
     if (source.includes(to)) {
       // Already patched (idempotent).
+      applied += 1
       continue
     }
     if (!source.includes(from)) {
-      throw new Error(`harness-jsonl-patch: could not find expected snippet in ${target}`)
+      skipped += 1
+      log(`会话日志韧性补丁「${id}」未匹配当前内核代码，已跳过（不影响内核更新）`)
+      continue
     }
     source = source.replace(from, to)
     changed = true
+    applied += 1
   }
 
   if (changed) {
     fs.writeFileSync(target, source, 'utf8')
   }
-  return changed
+  return { changed, applied, skipped }
 }
 
 module.exports = { patchHarnessJsonl }
