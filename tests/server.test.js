@@ -2,14 +2,15 @@
 
 /**
  * ServerManager state-machine tests: readiness detection, stale-log guard,
- * restart race, crash auto-restart, stop, spawn errors,
- * pre-heal, log rotation, and the Node-version launch gate — with an injected
- * fake child process and spawnSync.
+ * restart race, crash auto-restart, stop, spawn errors and log rotation, plus
+ * the Node-version launch gate (including the non-blocking prewarm probe) —
+ * with an injected fake child process and spawnSync.
  */
 
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
+const { Readable } = require('node:stream')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -19,6 +20,7 @@ const {
   parseNodeVersion,
   satisfiesHarnessEngines,
   resolveNodeLaunch,
+  prewarmNodeLaunch,
   resolveInstallRelative,
   resetNodeLaunchCache,
 } = require('../src/server.js')
@@ -257,39 +259,85 @@ test('harness source is tracked in state', () => {
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
-// ── pre-heal / log rotation ──────────────────────────────────────────────────
+// ── node-probe prewarm / boot timing ─────────────────────────────────────────
 
-test('preHealProfiles replaces a real directory with a junction', () => {
-  const { manager, harness, tmp } = makeManager()
-  const home = path.join(tmp, 'dsh-home')
-  const dest = path.join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-web-app')
-  fs.mkdirSync(dest, { recursive: true })
-  fs.writeFileSync(path.join(dest, 'leftover.txt'), 'old data')
+/** A fake `node --version` child: emits `output`, then closes with `code`. */
+function fakeProbeChild(output, code) {
+  const child = new EventEmitter()
+  child.stdout = Readable.from(output === null ? [] : [output])
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  setImmediate(() => child.emit('close', code))
+  return child
+}
 
-  manager.preHealProfiles(home, harness)
+test('prewarmNodeLaunch caches a usable system node without blocking', async () => {
+  resetNodeLaunchCache()
+  const launch = await prewarmNodeLaunch(() => fakeProbeChild('v24.18.0\n', 0))
+  assert.equal(launch.command, 'node')
+  assert.deepEqual(launch.nodeVersion, [24, 18, 0])
+  // Cached: the synchronous resolver no longer probes at all.
+  const sync = resolveNodeLaunch(() => {
+    throw new Error('spawnSync must not run once the prewarm resolved')
+  })
+  assert.equal(sync.command, 'node')
+  resetNodeLaunchCache()
+})
 
-  const st = fs.lstatSync(dest)
-  assert.equal(st.isSymbolicLink(), true, 'real dir must be replaced by a junction')
-  assert.equal(fs.existsSync(`${dest}.dsh-bak`), true, 'old dir moved aside')
-  assert.equal(fs.existsSync(path.join(`${dest}.dsh-bak`, 'leftover.txt')), true)
+test('prewarmNodeLaunch falls back to the Electron runtime for an old node', async () => {
+  resetNodeLaunchCache()
+  const launch = await prewarmNodeLaunch(() => fakeProbeChild('v20.11.0\n', 0))
+  assert.equal(launch.command, process.execPath)
+  assert.deepEqual(launch.args, ['--expose-internals'])
+  resetNodeLaunchCache()
+})
+
+test('prewarmNodeLaunch leaves the decision to the sync path when the probe fails', async () => {
+  resetNodeLaunchCache()
+  const launch = await prewarmNodeLaunch(() => fakeProbeChild(null, 1))
+  assert.equal(launch, null)
+  const sync = resolveNodeLaunch(() => ({ status: 0, stdout: 'v24.18.1\n' }))
+  assert.equal(sync.command, 'node')
+  resetNodeLaunchCache()
+})
+
+test('state exposes the current boot start time', () => {
+  const { manager, tmp } = makeManager()
+  assert.equal(manager.state.startedAt, null)
+  const before = Date.now()
+  manager.start()
+  const { startedAt } = manager.state
+  assert.ok(startedAt >= before && startedAt <= Date.now(), 'startedAt must be this boot')
   manager.dispose()
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
-test('preHealProfiles keeps an existing junction untouched', () => {
-  const { manager, harness, tmp } = makeManager()
-  const home = path.join(tmp, 'dsh-home')
-  const dest = path.join(home, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-web-app')
-  fs.mkdirSync(path.dirname(dest), { recursive: true })
-  const target = path.join(harness, 'node_modules', '@deepseek-ai', 'dsh-web-app')
-  fs.symlinkSync(target, dest, 'junction')
-
-  manager.preHealProfiles(home, harness)
-  assert.equal(fs.lstatSync(dest).isSymbolicLink(), true)
-  assert.equal(fs.existsSync(`${dest}.dsh-bak`), false, 'existing link must not be renamed')
+test('a ready server logs how long the boot took', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-test-'))
+  const harness = path.join(tmp, 'harness')
+  makeFakeHarness(harness)
+  const lines = []
+  const manager = new ServerManager({
+    settings: { get: (key) => ({ harnessPath: harness, dshHome: '', port: 0, autoRestart: true }[key]) },
+    logFile: path.join(tmp, 'server.log'),
+    onState: () => {},
+    onLog: (line) => lines.push(String(line)),
+    spawnImpl: () => fakeChild(),
+    spawnSyncImpl: () => ({ status: 0, stdout: 'v24.18.0\n' }),
+  })
+  manager.start()
+  fs.appendFileSync(manager.logFile, 'dsh web: http://127.0.0.1:1234/?token=x\n')
+  await sleep(400) // one poll interval
+  assert.equal(manager.phase, 'ready')
+  assert.ok(
+    lines.some((line) => /已就绪，耗时 \d+\.\d 秒/.test(line)),
+    `expected a boot-time line, got:\n${lines.join('\n')}`,
+  )
   manager.dispose()
   fs.rmSync(tmp, { recursive: true, force: true })
 })
+
+// ── log rotation ─────────────────────────────────────────────────────────────
 
 test('rotateLog keeps two generations when the log outgrows the cap', () => {
   const { manager, tmp } = makeManager()

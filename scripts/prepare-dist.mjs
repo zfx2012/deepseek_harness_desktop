@@ -86,6 +86,18 @@ if (process.argv.includes('--skip-bundle')) {
 
 // Apply the local resilience patch to the generated JSONL persistence backend.
 // This is a tracked build step because harness-deploy/ itself is gitignored.
+// Unlike an in-app kernel update (where a drifted anchor is skipped so the
+// update is never blocked), a RELEASE must not silently ship without the
+// patch: every anchor must still match the kernel we bundle.
 if (existsSync(path.join(OUT, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-jsonl'))) {
-  execFileSync(process.execPath, ['scripts/patch-harness-jsonl.mjs'], { cwd: ROOT, stdio: 'inherit' })
+  const { patchHarnessJsonl } = await import('../src/harness-jsonl-patch.js')
+  const result = patchHarnessJsonl(OUT, { log: (line) => console.log(`patch-harness-jsonl: ${line}`) })
+  console.log(`patch-harness-jsonl: ${result.applied} applied, ${result.skipped} skipped`)
+  if (result.skipped > 0) {
+    throw new Error(
+      `the bundled kernel drifted from ${result.skipped} session-log resilience anchor(s).\n` +
+        'Update the anchors in src/harness-jsonl-patch.js (or drop the obsolete entry deliberately)\n' +
+        'so the shipped kernel keeps corrupt-session recovery.',
+    )
+  }
 }

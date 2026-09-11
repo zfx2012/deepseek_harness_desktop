@@ -21,7 +21,14 @@ const os = require('node:os')
 const path = require('node:path')
 
 const READY_RE = /dsh web: (https?:\/\/[^\s]+)/
-const READY_POLL_MS = 350
+/**
+ * Readiness poll cadence. The kernel prints its readiness line only once the
+ * whole boot (module resolution, profile heal, HTTP listen) is done and stays
+ * silent before that, so this interval is pure added latency: at 120 ms the
+ * average delay before the GUI opens is ~60 ms, against ~175 ms at the old
+ * 350 ms, for 3 cheap stat() calls per second.
+ */
+const READY_POLL_MS = 120
 /** server.log rotates once it exceeds this size; two generations are kept. */
 const LOG_ROTATE_BYTES = 5 * 1024 * 1024
 /** Harness engines: ^22.19.0 || >=24.0.0 (mirrors the checkout's engines). */
@@ -126,6 +133,79 @@ function satisfiesHarnessEngines(version) {
 }
 
 let cachedLaunch = null
+let prewarmPromise = null
+
+/** The Electron-runtime launch used when no suitable system node exists. */
+function electronRuntimeLaunch() {
+  return {
+    command: process.execPath,
+    // Under ELECTRON_RUN_AS_NODE the node-addon-require-builtin native module
+    // cannot load (ABI mismatch with Electron's Node), so the harness's HMR
+    // service falls back to internal-module access, which needs this flag.
+    args: ['--expose-internals'],
+    env: { ELECTRON_RUN_AS_NODE: '1' },
+    nodeVersion: null,
+  }
+}
+
+/**
+ * Probe `node --version` WITHOUT blocking the caller. Called as early as
+ * possible (module load of the main process) so the verdict is already cached
+ * by the time the server is spawned: `spawnSync` in {@link resolveNodeLaunch}
+ * would otherwise freeze the main thread — and with it the first window paint —
+ * for the duration of a process spawn, which is hundreds of milliseconds on a
+ * cold machine.
+ *
+ * Resolves to the launch description, or null when the async probe could not
+ * decide (the synchronous path then runs as before).
+ * @param {Function} [spawnImpl] - injectable child_process.spawn (tests).
+ * @returns {Promise<object|null>}
+ */
+function prewarmNodeLaunch(spawnImpl = spawn) {
+  if (cachedLaunch) return Promise.resolve(cachedLaunch)
+  if (prewarmPromise) return prewarmPromise
+  prewarmPromise = new Promise((resolve) => {
+    let settled = false
+    const done = (value) => {
+      if (settled) return
+      settled = true
+      resolve(value ?? null)
+    }
+    let child
+    try {
+      child = spawnImpl('node', ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    } catch {
+      done(null) // fall back to the synchronous probe later
+      return
+    }
+    let out = ''
+    child.stdout?.on('data', (chunk) => {
+      out += String(chunk)
+    })
+    child.on('error', () => done(null))
+    child.on('close', (code) => {
+      const version = code === 0 ? parseNodeVersion(out) : null
+      if (version && satisfiesHarnessEngines(version)) {
+        cachedLaunch = { command: 'node', args: [], env: {}, nodeVersion: version }
+        done(cachedLaunch)
+        return
+      }
+      if (version) {
+        console.error(`[dsh-desktop] system node ${version.join('.')} does not satisfy harness engines (^22.19 || >=24); using the bundled Electron runtime`)
+        cachedLaunch = electronRuntimeLaunch()
+        done(cachedLaunch)
+        return
+      }
+      done(null) // probe unusable — let resolveNodeLaunch decide synchronously
+    })
+    const timer = setTimeout(() => {
+      try { child.kill() } catch { /* already gone */ }
+      done(null)
+    }, 5000)
+    timer.unref?.()
+  })
+  return prewarmPromise
+}
 
 /**
  * Resolve how to launch the dsh CLI.
@@ -133,6 +213,8 @@ let cachedLaunch = null
  * 1. `node` on PATH when it satisfies the harness engines (^22.19 || >=24).
  * 2. This Electron executable in ELECTRON_RUN_AS_NODE mode — a full Node
  *    runtime, so packaged apps work on machines without Node installed.
+ *
+ * {@link prewarmNodeLaunch} normally fills the cache before this is called.
  * @returns {{ command: string, args: string[], env: object, nodeVersion: string|null }}
  */
 function resolveNodeLaunch(spawnSyncImpl = spawnSync) {
@@ -150,15 +232,7 @@ function resolveNodeLaunch(spawnSyncImpl = spawnSync) {
   } catch {
     /* fall through */
   }
-  cachedLaunch = {
-    command: process.execPath,
-    // Under ELECTRON_RUN_AS_NODE the node-addon-require-builtin native module
-    // cannot load (ABI mismatch with Electron's Node), so the harness's HMR
-    // service falls back to internal-module access, which needs this flag.
-    args: ['--expose-internals'],
-    env: { ELECTRON_RUN_AS_NODE: '1' },
-    nodeVersion: null,
-  }
+  cachedLaunch = electronRuntimeLaunch()
   return cachedLaunch
 }
 
@@ -193,6 +267,8 @@ class ServerManager {
     this.filePos = 0
     this.noOpenSupport = undefined
     this.lockRecoveryDone = false
+    /** Epoch ms when the current boot's child was spawned (null before start). */
+    this.bootStartedAt = null
   }
 
   get state() {
@@ -202,6 +278,10 @@ class ServerManager {
       error: this.error ? String(this.error) : null,
       harnessRoot: this.harnessRoot ?? null,
       harnessSource: this.harnessSource ?? null,
+      // Epoch ms of the current boot: the renderer shows how long the user has
+      // been waiting, so a slow first boot reads as "still working" rather
+      // than a frozen window.
+      startedAt: this.bootStartedAt ?? null,
       logTail: this.logTail.slice(-40),
     }
   }
@@ -272,10 +352,13 @@ class ServerManager {
     const env = { ...process.env }
     if (home) env.DSH_HOME = home
     env.DSH_DESKTOP = '1'
-    // Fresh DSH_HOME + symlink-less Windows: pre-heal the profile fallback so
-    // the child never needs the SeCreateSymbolicLinkPrivilege.
+    // NOTE: the kernel maintains `$DSH_HOME/profiles/node_modules` itself when
+    // it boots (dsh-app-boot heals the module fallback), and it does so with
+    // *junctions* — which need no SeCreateSymbolicLinkPrivilege — so the
+    // desktop must NOT pre-create those links. Doing it here duplicated the
+    // work on the main thread and froze the window for ~30 s on a cold profile
+    // (each link costs ~100 ms on Windows) while the kernel then repeated it.
     const homeDir = home || path.join(os.homedir(), '.dsh')
-    this.preHealProfiles(homeDir, this.harnessRoot)
     // The kernel's atomic-write helper leaves `<file>.lock` behind after a
     // crash or a Windows delete failure and never checks liveness, so a stale
     // lock would block this boot. Clear it when its holder is gone.
@@ -283,6 +366,7 @@ class ServerManager {
     this.cleanupUpdateLeftovers(this.harnessRoot)
 
     const launch = resolveNodeLaunch(this.spawnSyncImpl)
+    this.bootStartedAt = Date.now()
     this.log(`启动: ${launch.command} ${[...launch.args, ...args].join(' ')}  (cwd: ${cwd}${home ? `, DSH_HOME: ${home}` : ''})`)
     this.error = null
     this.url = null
@@ -492,49 +576,6 @@ class ServerManager {
     }
   }
 
-  /**
-   * Pre-heal the profile module fallback with junctions. On first boot with a
-   * fresh DSH_HOME, dsh's profile init tries to create *symlinks* under
-   * $DSH_HOME/profiles/node_modules — which requires the Windows
-   * SeCreateSymbolicLinkPrivilege (developer mode / admin) and fails with
-   * EPERM for ordinary users. Junctions need no privilege; dsh's heal step
-   * sees the pre-created links and keeps them.
-   */
-  preHealProfiles(home, harnessRoot) {
-    try {
-      const topAi = path.join(harnessRoot, 'node_modules', '@deepseek-ai')
-      if (!fs.existsSync(topAi)) return
-      const profilesNm = path.join(home, 'profiles', 'node_modules')
-      fs.mkdirSync(path.join(profilesNm, '@deepseek-ai'), { recursive: true })
-      for (const entry of fs.readdirSync(topAi)) {
-        const target = path.join(topAi, entry)
-        const dest = path.join(profilesNm, '@deepseek-ai', entry)
-        try {
-          const st = fs.lstatSync(dest)
-          if (st.isSymbolicLink()) continue // already linked
-          // A real directory would make dsh's own heal step throw; move it
-          // aside so the junction can take its place.
-          if (st.isDirectory()) {
-            try {
-              fs.renameSync(dest, `${dest}.dsh-bak`)
-            } catch {
-              continue // in use or not movable; leave it alone
-            }
-          }
-        } catch {
-          /* dest missing — proceed to create */
-        }
-        try {
-          fs.symlinkSync(target, dest, 'junction')
-        } catch {
-          /* already linked or not a directory — heal will handle */
-        }
-      }
-    } catch {
-      /* best effort */
-    }
-  }
-
   /** Rotate server.log to server.log.1 once it exceeds the size cap. */
   rotateLog() {
     try {
@@ -591,6 +632,8 @@ class ServerManager {
       const match = chunk.match(READY_RE)
       if (match && this.phase === 'starting') {
         this.url = match[1]
+        const elapsed = this.bootStartedAt ? (Date.now() - this.bootStartedAt) / 1000 : null
+        if (elapsed !== null) this.log(`[server] 已就绪，耗时 ${elapsed.toFixed(1)} 秒`)
         this.setState({ phase: 'ready' })
       }
     }, READY_POLL_MS)
@@ -675,6 +718,7 @@ class ServerManager {
 /** Test hook: reset the cached node-launch decision. */
 function resetNodeLaunchCache() {
   cachedLaunch = null
+  prewarmPromise = null
 }
 
 module.exports = {
@@ -685,6 +729,7 @@ module.exports = {
   parseNodeVersion,
   satisfiesHarnessEngines,
   resolveNodeLaunch,
+  prewarmNodeLaunch,
   resolveInstallRelative,
   resetNodeLaunchCache,
 }

@@ -8,7 +8,8 @@
     1. unit tests           (node --test)
     2. bundle validation    (prepare-dist.mjs hard checks)
     3. package              (electron-builder --win dir, no installers)
-    4. bundled smoke        (packaged exe --smoke-bundled: MUST use resources/harness)
+    4. bundled smoke        (packaged exe --smoke-bundled: MUST use resources/harness,
+                             and MUST paint the boot-progress page before ready)
     5. error-path smoke     (packaged exe --smoke-error: invalid harness path -> error card)
     6. no-node smoke        (packaged exe with stripped PATH: ELECTRON_RUN_AS_NODE fallback)
     7. update-feed smoke    (packaged exe --smoke-update: discovers v0.2.0 from a local feed)
@@ -36,7 +37,7 @@ function Invoke-Step {
 }
 
 function Run-Smoke {
-  param([string]$Label, [string[]]$SmokeArgs, [string]$ConfigJson, [string]$UserData, [string[]]$ExtraEnv = @())
+  param([string]$Label, [string[]]$SmokeArgs, [string]$ConfigJson, [string]$UserData, [string[]]$ExtraEnv = @(), [string[]]$Expect = @())
   $out = Join-Path $root ".verify-$Label-out.txt"
   $err = Join-Path $root ".verify-$Label-err.txt"
   Remove-Item -Force $out, $err -ErrorAction SilentlyContinue
@@ -63,6 +64,19 @@ function Run-Smoke {
       Get-Content $err -ErrorAction SilentlyContinue | Select-Object -Last 10
       throw "smoke [$Label] failed"
     }
+    # Asserted markers: a smoke that exits 0 without the behavior under test
+    # would otherwise pass silently. Each pattern must match somewhere in the
+    # output (they land on different lines, so they are checked separately).
+    if ($Expect.Count -gt 0) {
+      $text = Get-Content $out -Raw -ErrorAction SilentlyContinue
+      foreach ($pattern in $Expect) {
+        if ($text -notmatch $pattern) {
+          Write-Host "FAILED ($Label): stdout does not match /$pattern/" -ForegroundColor Red
+          Get-Content $out -ErrorAction SilentlyContinue | Select-Object -Last 10
+          throw "smoke [$Label] missing expected output"
+        }
+      }
+    }
     Get-Content $out -Tail 3
   } finally {
     Remove-Item Env:DSH_DESKTOP_USERDATA -ErrorAction SilentlyContinue
@@ -85,7 +99,8 @@ Invoke-Step 'bundle validation' { node scripts/prepare-dist.mjs }
 # 3. package (win-unpacked only; installers are built separately)
 Invoke-Step 'package (dir)' { npx electron-builder --win dir }
 
-# 4. bundled smoke — MUST come from resources/harness
+# 4. bundled smoke — MUST come from resources/harness, and the window MUST
+# already show the boot-progress status page while the kernel is still starting
 $smokeHome = Join-Path $root '.verify-smoke-home'
 # JSON-escape the whole path: the '\\dsh-home' suffix must be doubled too,
 # otherwise '\d' is an invalid JSON escape and SettingsStore silently falls
@@ -93,7 +108,8 @@ $smokeHome = Join-Path $root '.verify-smoke-home'
 $dshHome = (($smokeHome + '\dsh-home') -replace '\\', '\\')
 $config = '{"harnessPath":"","dshHome":"' + $dshHome + '","port":0,"autoRestart":true}'
 Invoke-Step 'bundled smoke' {
-  Run-Smoke -Label 'bundled' -SmokeArgs @('--smoke-bundled', '--disable-gpu') -ConfigJson $config -UserData $smokeHome
+  Run-Smoke -Label 'bundled' -SmokeArgs @('--smoke-bundled', '--disable-gpu') -ConfigJson $config -UserData $smokeHome `
+    -Expect @('SMOKE_BOOT_UI_OK', 'SMOKE_OK .*bootUi=checked')
 }
 
 # 5. error-path smoke — invalid explicit harness path must render the error card

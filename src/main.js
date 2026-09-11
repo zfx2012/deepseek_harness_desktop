@@ -19,7 +19,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { SettingsStore } = require('./store')
-const { ServerManager, detectHarnessRoots, isHarness, resolveInstallRelative } = require('./server')
+const { ServerManager, detectHarnessRoots, isHarness, resolveInstallRelative, prewarmNodeLaunch } = require('./server')
 const { compareVersions, fetchOfficialHarnessVersion } = require('./harness-update')
 
 // Auto-update is opt-in: set DSH_DESKTOP_UPDATE_URL to a generic feed URL
@@ -69,9 +69,17 @@ function effectiveSettings() {
 const SMOKE = process.argv.includes('--smoke')
 
 // Startup diagnostics (stderr so they survive any stdout capture).
+const BOOT_T0 = Date.now()
 const diag = (...args) => console.error('[dsh-desktop]', ...args)
+/** Boot-phase timing: every entry states how long the user has been waiting. */
+const diagBoot = (label) => diag(`[boot +${Date.now() - BOOT_T0}ms] ${label}`)
 process.on('uncaughtException', (error) => diag('uncaughtException', error))
 process.on('unhandledRejection', (error) => diag('unhandledRejection', error))
+
+// Kick off the "is there a usable system node?" probe NOW — it spawns a process,
+// so doing it here (while Chromium is still initializing and long before the
+// server is spawned) keeps it off the first-paint and boot critical paths.
+prewarmNodeLaunch()
 
 // Sandboxed/dev override: keep all app data inside a chosen directory
 // (otherwise Electron uses %APPDATA%/<AppName>).
@@ -416,7 +424,7 @@ function restartServer() {
 app.setName('DeepSeek Harness Desktop')
 
 app.whenReady().then(() => {
-  diag('whenReady, electron', process.versions.electron, 'chrome', process.versions.chrome)
+  diagBoot(`whenReady (electron ${process.versions.electron}, chrome ${process.versions.chrome})`)
   settingsStore = new SettingsStore(app.getPath('userData'))
   server = new ServerManager({
     settings: settingsStore,
@@ -436,13 +444,24 @@ app.whenReady().then(() => {
     },
   })
 
-  // Main window: the Web GUI (opens straight into it once the server is up).
+  // Main window: the Web GUI. Paint the status page FIRST — the kernel prints
+  // nothing at all until it is ready (≈6 s warm, 30 s+ when it has to build the
+  // profile module links), so a window that waits for the server looks hung.
+  // The status page shows the phase, elapsed time and log tail; syncMainWindow()
+  // swaps it for the Web GUI the instant the server is ready.
   mainWindow = createMainWindow()
+  // IPC handlers must exist before the page can call them — registering them
+  // after loadFile() would race the renderer's first getState() call.
+  registerIpc()
+  mainWindow.loadFile(settingsUrl()).then(
+    () => diagBoot('startup status page loaded'),
+    (error) => diag('startup status page failed to load:', error.message),
+  )
+  mainWindow.webContents.once('did-finish-load', () => diagBoot('first paint ready'))
 
   buildMenu()
   createTray()
 
-  registerIpc()
   initAutoUpdater()
 
   if (SMOKE_UPDATE) {
@@ -451,9 +470,9 @@ app.whenReady().then(() => {
     return
   }
 
-  diag('calling server.start()')
+  diagBoot('starting server child')
   server.start()
-  diag('server.start() returned, state=', JSON.stringify(server.state))
+  diagBoot(`server.start() returned, state=${server.state.phase}`)
 
   if (SMOKE || SMOKE_BUNDLED || SMOKE_ERROR) {
     runSmoke()
@@ -870,6 +889,8 @@ function runSmoke() {
     finish(false, `SMOKE_FAIL timeout (phase=${s.phase} url=${s.url || '-'} window=${winUrl})`)
   }, 90000)
   const interval = setInterval(check, 500)
+  /** Whether the "window shows progress while booting" assertion has run. */
+  let earlyChecked = false
 
   async function check() {
     const state = server.state
@@ -905,7 +926,35 @@ function runSmoke() {
       finish(false, `SMOKE_FAIL server error: ${state.error}\n--- server log ---\n${state.logTail.join('\n')}`)
       return
     }
-    if (state.phase !== 'ready') return
+    if (state.phase !== 'ready') {
+      // While the kernel boots, the window must already show the status page
+      // with a live "starting" hint — a blank window during the (multi-second)
+      // boot is what users read as "the app is slow". Assert it once.
+      if (state.phase === 'starting' && !earlyChecked && mainWindow && !mainWindow.isDestroyed()) {
+        const url = mainWindow.webContents.getURL()
+        if (!url.includes('settings/index.html')) return
+        earlyChecked = true
+        try {
+          const dom = await mainWindow.webContents.executeJavaScript(`(() => {
+            const hint = document.getElementById('server-hint')
+            return {
+              phaseText: (document.getElementById('server-phase') || {}).textContent || '',
+              hintVisible: !!hint && !hint.classList.contains('hidden'),
+              hintText: (hint || {}).textContent || '',
+            }
+          })()`)
+          const ok = dom.hintVisible && /正在启动内核/.test(dom.hintText) && /已等待 \d+ 秒/.test(dom.hintText)
+          if (!ok) {
+            finish(false, `SMOKE_FAIL startup page shows no progress: ${JSON.stringify(dom)}`)
+            return
+          }
+          console.log(`SMOKE_BOOT_UI_OK ${JSON.stringify(dom.hintText)}`)
+        } catch (error) {
+          finish(false, `SMOKE_FAIL startup page executeJavaScript: ${error.message}`)
+        }
+      }
+      return
+    }
     // Provenance assertion: --smoke-bundled must run from the bundled harness
     // (the default setting points at <install>/resources/harness, so the
     // source may be 'setting' rather than 'bundled' — the root must match).
@@ -920,7 +969,8 @@ function runSmoke() {
     // Compare origins: the ready URL's ?token= is answered with a 303 to `/`.
     const wc = mainWindow.webContents
     if (!wc.isLoading() && sameOrigin(wc.getURL(), state.url)) {
-      finish(true, `SMOKE_OK ${state.url} harnessSource=${state.harnessSource}`)
+      const elapsed = server.state.startedAt ? ((Date.now() - server.state.startedAt) / 1000).toFixed(1) : '?'
+      finish(true, `SMOKE_OK ${state.url} harnessSource=${state.harnessSource} bootUi=${earlyChecked ? 'checked' : 'skipped'} bootSeconds=${elapsed}`)
     }
   }
   mainWindow.webContents.on('did-finish-load', check)

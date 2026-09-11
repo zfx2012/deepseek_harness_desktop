@@ -30,7 +30,35 @@ const PHASE_TEXT = {
   stopping: '正在停止…',
 }
 
+const serverHint = $('server-hint')
+/** Latest state pushed by the main process (kept for the 1 Hz hint ticker). */
+let latest = { phase: 'idle', startedAt: null, logTail: [] }
+let hintTimer = null
+
+/**
+ * A boot progress line. The kernel prints NOTHING until it is ready (≈6 s warm;
+ * tens of seconds when it has to build the profile module links for the first
+ * time), so silence must still look like progress instead of a frozen window.
+ */
+function renderHint() {
+  if (latest.phase !== 'starting') {
+    serverHint.classList.add('hidden')
+    serverHint.textContent = ''
+    return
+  }
+  const started = latest.startedAt || Date.now()
+  const seconds = Math.max(0, Math.round((Date.now() - started) / 1000))
+  // The newest kernel line, ignoring our own launch banner (not user-facing).
+  const tail = (latest.logTail || []).map((line) => String(line).trim()).filter((line) => line && !line.startsWith('启动:')).slice(-1)[0] || ''
+  const parts = [`正在启动内核…已等待 ${seconds} 秒`]
+  if (seconds >= 8 && !tail) parts.push('（首次启动需要建立模块链接，可能需要 10–60 秒，请勿关闭窗口）')
+  if (tail) parts.push(`· ${tail.slice(0, 200)}`)
+  serverHint.classList.remove('hidden')
+  serverHint.textContent = parts.join('')
+}
+
 function renderState(state) {
+  latest = state
   const phase = state.phase || 'idle'
   serverDot.className = `dot ${phase === 'ready' ? 'ready' : phase === 'starting' || phase === 'stopping' ? 'starting' : phase === 'error' ? 'error' : 'idle'}`
   serverPhase.textContent = PHASE_TEXT[phase] || phase
@@ -43,6 +71,13 @@ function renderState(state) {
   retryBtn.classList.toggle('hidden', !isError)
   // "Back" is only meaningful when the Web GUI is actually up.
   backToGuiBtn.classList.toggle('hidden', !isReady)
+  renderHint()
+  const ticking = phase === 'starting'
+  if (ticking && !hintTimer) hintTimer = setInterval(renderHint, 500)
+  if (!ticking && hintTimer) {
+    clearInterval(hintTimer)
+    hintTimer = null
+  }
 }
 
 function setStatus(text, kind) {

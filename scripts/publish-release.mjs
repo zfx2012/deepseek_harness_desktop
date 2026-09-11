@@ -60,16 +60,25 @@ function assets() {
 
 function bodyText() {
   if (!BODY_ARG) {
+    // Name the kernel actually bundled in this installer — it is the version
+    // users end up running, and it is not otherwise visible from the tag.
+    let harnessVersion = null
+    try {
+      harnessVersion = JSON.parse(readFileSync(path.join(ROOT, 'harness-deploy', 'manifest.json'), 'utf8')).harnessVersion
+    } catch {
+      /* bundle manifest unavailable — the body simply omits the version */
+    }
     return [
       '## 安装包',
       '',
       '- `DeepSeek Harness Desktop-<ver>-x64.exe`：NSIS 安装包（可选安装目录）',
       '',
-      '内置官方发布版 Harness 内核，安装即用（无需 Node，自动回退内置运行时）。',
+      `内置官方发布版 Harness 内核${harnessVersion ? ` **${harnessVersion}**` : ''}，安装即用（无需 Node，自动回退内置运行时）。`,
       '',
       '## 功能',
       '',
       '- Windows 桌面外壳（Electron 43），自动拉起内置 `dsh web` 服务器',
+      '- 启动即时反馈：窗口先显示状态页（阶段 / 已等待秒数 / 日志），内核就绪后自动切到 Web 主界面',
       '- 自包含：无需 Node / 无需外部 harness',
       '- 设置页：harness 路径 / DSH_HOME / 端口 默认值预填，**内核更新检测 + 一键更新**',
       '- 崩溃自动重启、日志轮转、托盘常驻',
