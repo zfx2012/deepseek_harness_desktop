@@ -24,7 +24,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, openSync, closeSync } fr
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { installHarnessUpdate, fetchOfficialHarnessVersion } from '../src/harness-update.js'
+import { installHarnessUpdate, fetchOfficialHarnessVersion, pruneDevArtifacts } from '../src/harness-update.js'
 
 /** True when a directory is a built harness checkout (bin + deps in place). */
 function isBuiltHarness(root) {
@@ -140,6 +140,10 @@ const requested = EXPLICIT_VERSION
 if (binExists && !FORCE && (!requested || requested === manifestVersion)) {
   console.log(`harness-deploy/ already bundled (${manifestVersion ?? '?'}); use --force to rebuild: ${OUT}`)
   execFileSync(process.execPath, ['scripts/patch-harness-jsonl.mjs'], { cwd: ROOT, stdio: 'inherit' })
+  // Keep the "bundle carries no dev-only files" invariant even for a tree that
+  // predates the pruning step (an idempotent, cheap walk).
+  const pruned = pruneDevArtifacts(OUT)
+  if (pruned > 0) log(`harness-deploy: pruned ${pruned} dev-only files (*.d.ts, *.map)`)
   process.exit(0)
 }
 

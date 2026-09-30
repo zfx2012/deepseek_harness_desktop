@@ -2,7 +2,8 @@
 
 /**
  * Kernel-update helpers: semver-ish comparison, the official version fetch,
- * and the direct-install merge (installHarnessUpdate).
+ * the direct-install merge (installHarnessUpdate), and the dev-artifact prune
+ * that keeps the installed payload small.
  */
 
 const test = require('node:test')
@@ -14,6 +15,7 @@ const {
   compareVersions,
   fetchOfficialHarnessVersion,
   installHarnessUpdate,
+  pruneDevArtifacts,
 } = require('../src/harness-update.js')
 
 /** Fake npm: materializes a plausible stage tree for the requested install. */
@@ -250,4 +252,51 @@ test('installHarnessUpdate falls back to cmd.exe when .cmd spawn is blocked', as
   assert.deepEqual(calls[2][1].slice(0, 5), ['/d', '/s', '/c', 'npm.cmd', 'install'])
   assert.equal(fs.readFileSync(path.join(target, 'lib', 'bin.js'), 'utf8'), '// new kernel\n')
   fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+// ©¤©¤ dev-artifact pruning (installer payload size) ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+
+function makePruneTree(root) {
+  const files = [
+    'lib/index.js',
+    'lib/index.js.map',
+    'lib/index.d.ts',
+    'dist/app.js',
+    'dist/app.js.map',
+    'src/app.ts',
+    'src/app.mts',
+    'types/deep/nested.d.ts',
+    'README.md',
+    'node_modules/pkg/index.js',
+    'node_modules/pkg/index.cjs.map',
+  ]
+  for (const rel of files) {
+    const full = path.join(root, rel)
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    fs.writeFileSync(full, 'x')
+  }
+  return files
+}
+
+test('pruneDevArtifacts removes only declaration files and source maps', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-prune-'))
+  makePruneTree(tmp)
+
+  const removed = pruneDevArtifacts(tmp)
+  assert.equal(removed, 5, 'four .d.ts/.map files plus the nested one')
+
+  const kept = ['lib/index.js', 'dist/app.js', 'src/app.ts', 'src/app.mts', 'README.md', 'node_modules/pkg/index.js']
+  for (const rel of kept) {
+    assert.ok(fs.existsSync(path.join(tmp, rel)), `${rel} must survive the prune`)
+  }
+  for (const rel of ['lib/index.js.map', 'lib/index.d.ts', 'types/deep/nested.d.ts']) {
+    assert.equal(fs.existsSync(path.join(tmp, rel)), false, `${rel} must be pruned`)
+  }
+  // Idempotent: a second pass finds nothing left to remove.
+  assert.equal(pruneDevArtifacts(tmp), 0)
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('pruneDevArtifacts tolerates a missing root', () => {
+  assert.equal(pruneDevArtifacts(path.join(os.tmpdir(), 'dsh-prune-does-not-exist-xyz')), 0)
 })

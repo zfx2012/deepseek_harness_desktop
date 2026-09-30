@@ -24,6 +24,11 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# A DSH shell (and any other ELECTRON_RUN_AS_NODE environment) makes the
+# packaged Electron binary run as plain Node: it rejects the smoke switches
+# with "bad option" and exits non-zero. Clear it for every launch below.
+Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+
 # Respect externally provided mirrors/caches.
 if (-not $env:ELECTRON_BUILDER_CACHE) { $env:ELECTRON_BUILDER_CACHE = Join-Path $root '.cache\electron-builder' }
 if (-not $env:ELECTRON_BUILDER_BINARIES_MIRROR) { $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/' }

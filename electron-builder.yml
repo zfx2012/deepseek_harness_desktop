@@ -40,6 +40,24 @@ nsis:
   createDesktopShortcut: always
   createStartMenuShortcut: true
   shortcutName: DeepSeek Harness Desktop
+  # ── install-speed configuration (measured, not guessed) ────────────────────
+  # The app payload dominates install time and, on this app, extraction is
+  # per-FILE bound rather than codec bound: extracting the payload and plain-
+  # copying the same tree cost the same (24 s for 25.4k files; 13 s for the
+  # pruned 13.9k files). electron-builder's default 7z payload is also
+  # differential-aware, which forces `-ms=off -md=1m` (25k separate 1 MB LZMA
+  # streams) and extracts into $PLUGINSDIR before copying to $INSTDIR — a full
+  # second pass that NSIS runs single-threaded (~45 s on its own).
+  # useZip switches the payload to Deflate, which nsisunz extracts STRAIGHT into
+  # $INSTDIR: one pass, no staging copy. Measured silent installs of identical
+  # content: 103 s (7z + copy) -> 16 s (zip). Cost: the installer grows from
+  # 143.8 MB to 179.1 MB, because Deflate cannot match LZMA2 on this text-heavy
+  # payload (a solid LZMA2 payload would be 107.3 MB but needs the staged copy).
+  # differentialPackage must be false: electron-builder only honours useZip when
+  # the archive is not differential-aware. We ship no delta feed (the auto-
+  # updater is opt-in via DSH_DESKTOP_UPDATE_URL), so nothing is lost.
+  differentialPackage: false
+  useZip: true
   # Custom running-app check: never match the installer/uninstaller itself,
   # so an installer placed inside the install dir can still upgrade in place.
   # customInit also sets the default install dir to Program Files\DeepSeekHarnessDesktop.

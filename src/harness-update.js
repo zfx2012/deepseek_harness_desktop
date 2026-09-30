@@ -114,6 +114,56 @@ function mergeDir(src, dst, exclude = new Set()) {
 }
 
 /**
+ * File kinds that no runtime path reads: TypeScript declaration files and
+ * source maps. A published closure carries ~11.5k of them out of ~25.4k files
+ * (69 MB of 562 MB), and they dominate the *installer* cost: extraction and
+ * file creation are per-file bound (measured: extracting the payload and
+ * plain-copying the same tree take the same time), so dropping them cuts the
+ * install's file work by ~45% and shrinks the compressed payload as well.
+ *
+ * Safety: no runtime module under the closure references `.d.ts` (verified by
+ * scanning every .js/.mjs/.cjs for the literal), and `.map` files are only
+ * named by `sourceMappingURL` comments, which Node reads only when started
+ * with --enable-source-maps (the desktop never passes it). `.ts`/`.mts`
+ * sources are deliberately KEPT — some packages load them at runtime.
+ */
+const DEV_ARTIFACT_SUFFIXES = ['.d.ts', '.map']
+
+/**
+ * Delete dev-only artifacts under a harness root, in place.
+ * @param {string} root - harness root.
+ * @returns {number} number of files removed.
+ */
+function pruneDevArtifacts(root) {
+  const stack = [root]
+  let removed = 0
+  while (stack.length > 0) {
+    const dir = stack.pop()
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue // unreadable directory: nothing to prune inside it
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        stack.push(full)
+        continue
+      }
+      if (!DEV_ARTIFACT_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) continue
+      try {
+        fs.rmSync(full, { force: true })
+        removed += 1
+      } catch {
+        /* locked by an indexer/antivirus — leave it, it is only dead weight */
+      }
+    }
+  }
+  return removed
+}
+
+/**
  * Install a published dsh version into a deploy-layout harness root:
  *
  *   1. `npm install @deepseek-ai/dsh@<version>` into a temp stage
@@ -232,6 +282,11 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
       }
       mergeDir(path.join(pkg, 'node_modules'), tempNm)
 
+      // 3b. drop declaration files and source maps before the swap: they cost
+      //     real install time on every user machine and are never loaded.
+      const pruned = pruneDevArtifacts(temp)
+      if (pruned > 0) log(`已移除 ${pruned} 个仅开发用的类型声明/源码映射文件（不影响运行）。`)
+
       // 4. provenance manifest, mirroring scripts/build-closure.mjs.
       let pkgJson = {}
       try {
@@ -312,6 +367,7 @@ module.exports = {
   compareVersions,
   fetchOfficialHarnessVersion,
   installHarnessUpdate,
+  pruneDevArtifacts,
   OFFICIAL_REPO_URL,
   NPM_REGISTRY_URL,
 }
