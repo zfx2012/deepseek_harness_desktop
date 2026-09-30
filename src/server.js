@@ -135,17 +135,45 @@ function satisfiesHarnessEngines(version) {
 let cachedLaunch = null
 let prewarmPromise = null
 
-/** The Electron-runtime launch used when no suitable system node exists. */
+/** The Electron-runtime launch, used only when no Node runtime is available. */
 function electronRuntimeLaunch() {
   return {
     command: process.execPath,
     // Under ELECTRON_RUN_AS_NODE the node-addon-require-builtin native module
     // cannot load (ABI mismatch with Electron's Node), so the harness's HMR
     // service falls back to internal-module access, which needs this flag.
+    // Kernels from 0.2.0 dropped that fallback and require a real Node, which
+    // is why the bundled runtime below is preferred over this one.
     args: ['--expose-internals'],
     env: { ELECTRON_RUN_AS_NODE: '1' },
     nodeVersion: null,
   }
+}
+
+/**
+ * Absolute path of the Node runtime shipped inside the app (scripts/bundle-node.mjs
+ * installs it as resources/node), or null when it is absent.
+ *
+ * The app bundles a real Node because kernels from 0.2.0 load a native addon
+ * that only accepts an exact table of Electron runtime fingerprints: running
+ * the kernel on our own Electron build would freeze the app on one Electron
+ * release and break on the next kernel update.
+ * @param {object} [deps] - { resourcesPath?, appRoot? } for tests.
+ */
+function bundledNodeExe(deps = {}) {
+  const resourcesPath = deps.resourcesPath !== undefined ? deps.resourcesPath : process.resourcesPath
+  const appRoot = deps.appRoot !== undefined ? deps.appRoot : path.join(__dirname, '..')
+  const candidates = []
+  if (resourcesPath) candidates.push(path.join(resourcesPath, 'node', 'node.exe'))
+  candidates.push(path.join(appRoot, 'node-runtime', 'node.exe'))
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      /* unreadable: try the next location */
+    }
+  }
+  return null
 }
 
 /**
@@ -191,12 +219,9 @@ function prewarmNodeLaunch(spawnImpl = spawn) {
         return
       }
       if (version) {
-        console.error(`[dsh-desktop] system node ${version.join('.')} does not satisfy harness engines (^22.19 || >=24); using the bundled Electron runtime`)
-        cachedLaunch = electronRuntimeLaunch()
-        done(cachedLaunch)
-        return
+        console.error(`[dsh-desktop] system node ${version.join('.')} does not satisfy harness engines (^22.19 || >=24); using the bundled Node runtime`)
       }
-      done(null) // probe unusable — let resolveNodeLaunch decide synchronously
+      done(null) // let resolveNodeLaunch pick the bundled runtime
     })
     const timer = setTimeout(() => {
       try { child.kill() } catch { /* already gone */ }
@@ -211,13 +236,18 @@ function prewarmNodeLaunch(spawnImpl = spawn) {
  * Resolve how to launch the dsh CLI.
  *
  * 1. `node` on PATH when it satisfies the harness engines (^22.19 || >=24).
- * 2. This Electron executable in ELECTRON_RUN_AS_NODE mode — a full Node
- *    runtime, so packaged apps work on machines without Node installed.
+ * 2. The Node runtime shipped with the app (resources/node) — this is what
+ *    makes "install and run, no Node required" hold for kernels from 0.2.0,
+ *    whose native addon rejects Electron's own runtime.
+ * 3. This Electron executable in ELECTRON_RUN_AS_NODE mode, as a last resort
+ *    (only viable for kernels older than 0.2.0).
  *
  * {@link prewarmNodeLaunch} normally fills the cache before this is called.
+ * @param {Function} [spawnSyncImpl] - injectable child_process.spawnSync.
+ * @param {object} [deps] - { bundledNodeExe? } for tests.
  * @returns {{ command: string, args: string[], env: object, nodeVersion: string|null }}
  */
-function resolveNodeLaunch(spawnSyncImpl = spawnSync) {
+function resolveNodeLaunch(spawnSyncImpl = spawnSync, deps = {}) {
   if (cachedLaunch) return cachedLaunch
   try {
     const probe = spawnSyncImpl('node', ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 5000 })
@@ -227,11 +257,19 @@ function resolveNodeLaunch(spawnSyncImpl = spawnSync) {
         cachedLaunch = { command: 'node', args: [], env: {}, nodeVersion: version }
         return cachedLaunch
       }
-      console.error(`[dsh-desktop] system node ${version ? version.join('.') : '(unparsable)'} does not satisfy harness engines (^22.19 || >=24); using the bundled Electron runtime`)
+      console.error(`[dsh-desktop] system node ${version ? version.join('.') : '(unparsable)'} does not satisfy harness engines (^22.19 || >=24); using the bundled Node runtime`)
+    } else {
+      console.error('[dsh-desktop] no usable system node found; using the bundled Node runtime')
     }
   } catch {
-    /* fall through */
+    /* fall through to the bundled runtime */
   }
+  const bundled = deps.bundledNodeExe !== undefined ? deps.bundledNodeExe : bundledNodeExe()
+  if (bundled) {
+    cachedLaunch = { command: bundled, args: [], env: {}, nodeVersion: null, bundled: true }
+    return cachedLaunch
+  }
+  console.error('[dsh-desktop] the bundled Node runtime is missing; falling back to the Electron runtime (unsupported by kernel >= 0.2.0)')
   cachedLaunch = electronRuntimeLaunch()
   return cachedLaunch
 }
@@ -744,6 +782,7 @@ module.exports = {
   satisfiesHarnessEngines,
   resolveNodeLaunch,
   prewarmNodeLaunch,
+  bundledNodeExe,
   resolveInstallRelative,
   resetNodeLaunchCache,
 }

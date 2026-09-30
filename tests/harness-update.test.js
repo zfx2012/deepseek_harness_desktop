@@ -16,6 +16,7 @@ const {
   fetchOfficialHarnessVersion,
   installHarnessUpdate,
   pruneDevArtifacts,
+  bundledNpmCommand,
 } = require('../src/harness-update.js')
 
 /** Fake npm: materializes a plausible stage tree for the requested install. */
@@ -254,7 +255,7 @@ test('installHarnessUpdate falls back to cmd.exe when .cmd spawn is blocked', as
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
-// ©¤©¤ dev-artifact pruning (installer payload size) ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+// â”€â”€ dev-artifact pruning (installer payload size) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function makePruneTree(root) {
   const files = [
@@ -299,4 +300,72 @@ test('pruneDevArtifacts removes only declaration files and source maps', () => {
 
 test('pruneDevArtifacts tolerates a missing root', () => {
   assert.equal(pruneDevArtifacts(path.join(os.tmpdir(), 'dsh-prune-does-not-exist-xyz')), 0)
+})
+
+// â”€â”€ bundled npm fallback (machines without a system Node.js) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+test('bundledNpmCommand resolves resources/node then the dev node-runtime dir', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-bundled-npm-'))
+  const resources = path.join(tmp, 'resources')
+  const appRoot = path.join(tmp, 'app')
+  assert.equal(bundledNpmCommand({ resourcesPath: resources, appRoot }), null)
+
+  fs.mkdirSync(path.join(resources, 'node'), { recursive: true })
+  fs.writeFileSync(path.join(resources, 'node', 'npm.cmd'), '')
+  fs.mkdirSync(path.join(appRoot, 'node-runtime'), { recursive: true })
+  fs.writeFileSync(path.join(appRoot, 'node-runtime', 'npm.cmd'), '')
+  assert.equal(bundledNpmCommand({ resourcesPath: resources, appRoot }), path.join(resources, 'node', 'npm.cmd'))
+  assert.equal(bundledNpmCommand({ resourcesPath: '', appRoot }), path.join(appRoot, 'node-runtime', 'npm.cmd'))
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('installHarnessUpdate retries with the bundled npm when system npm is missing', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-update-nonpm-'))
+  const stage = path.join(tmp, 'harness')
+  const bundled = 'C:\\app\\resources\\node\\npm.cmd'
+  const calls = []
+  const spawnImpl = (cmd, args, opts) => {
+    calls.push([cmd, args])
+    // The bundled npm.cmd is reached either directly or through the cmd.exe
+    // retry, so identify it by presence anywhere in the argv.
+    const isBundled = cmd === bundled || args.includes(bundled)
+    if (args.includes('--version')) {
+      // Only the bundled npm answers; the PATH npm does not exist at all.
+      return isBundled
+        ? { status: 0, stdout: '11.19.0\n', stderr: '' }
+        : { status: null, error: Object.assign(new Error('not found'), { code: 'ENOENT' }) }
+    }
+    assert.equal(isBundled, true, 'the install itself must use the bundled npm')
+    assert.ok(args.includes('install'))
+    const pkg = path.join(opts.cwd, 'node_modules', '@deepseek-ai', 'dsh')
+    fs.mkdirSync(path.join(pkg, 'lib'), { recursive: true })
+    fs.writeFileSync(path.join(pkg, 'lib', 'bin.js'), '// new kernel\n')
+    fs.writeFileSync(path.join(pkg, 'lib', 'index.d.ts'), '// dev-only\n')
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9' }))
+    return { status: 0, stdout: '', stderr: '' }
+  }
+
+  const logs = []
+  const result = await installHarnessUpdate('9.9.9', stage, {
+    spawnImpl,
+    log: (line) => logs.push(line),
+    fresh: true,
+    bundledNpm: bundled,
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.version, '9.9.9')
+  assert.ok(logs.some((line) => line.includes('å†…ç½®çš„ Node/npm')), `expected the fallback note, got: ${logs.join(' | ')}`)
+  // The pruned tree must not carry the dev-only declaration file.
+  assert.equal(fs.existsSync(path.join(stage, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'index.d.ts')), false)
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('installHarnessUpdate explains the missing npm when none is available', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-update-nonpm-both-'))
+  const spawnImpl = () => ({ status: null, error: Object.assign(new Error('not found'), { code: 'ENOENT' }) })
+  await assert.rejects(
+    () => installHarnessUpdate('9.9.9', path.join(tmp, 'harness'), { spawnImpl, fresh: true, bundledNpm: null }),
+    /Node\.js/,
+  )
+  fs.rmSync(tmp, { recursive: true, force: true })
 })

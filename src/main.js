@@ -19,7 +19,14 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { SettingsStore } = require('./store')
-const { ServerManager, detectHarnessRoots, isHarness, resolveInstallRelative, prewarmNodeLaunch } = require('./server')
+const {
+  ServerManager,
+  detectHarnessRoots,
+  isHarness,
+  resolveInstallRelative,
+  prewarmNodeLaunch,
+  bundledNodeExe,
+} = require('./server')
 const { compareVersions, fetchOfficialHarnessVersion } = require('./harness-update')
 
 // Auto-update is opt-in: set DSH_DESKTOP_UPDATE_URL to a generic feed URL
@@ -589,14 +596,19 @@ function runHarnessUpdateInChild(version, target, fresh, onProgress) {
     if (fresh) args.push('--fresh')
     let child
     try {
-      // System Node when available, else this Electron binary as a Node runtime.
+      // System Node when available, else the Node runtime shipped with the app,
+      // else this Electron binary as a Node runtime (only viable for kernels
+      // older than 0.2.0, whose native addon rejects Electron's own build).
+      const bundled = bundledNodeExe()
       const probe = spawnSync('node', ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 5000 })
       child = probe.status === 0
         ? spawn('node', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-        : spawn(process.execPath, args, {
-            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-            stdio: ['ignore', 'pipe', 'pipe'],
-            windowsHide: true,
+        : bundled
+          ? spawn(bundled, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+          : spawn(process.execPath, args, {
+              env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+              stdio: ['ignore', 'pipe', 'pipe'],
+              windowsHide: true,
           })
     } catch (error) {
       resolve({ ok: false, error: error.message })

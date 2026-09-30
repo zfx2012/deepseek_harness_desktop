@@ -13,7 +13,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -82,6 +82,24 @@ if (process.argv.includes('--skip-bundle')) {
   if (process.argv.includes('--no-auto-fetch')) bundleArgs.push('--no-auto-fetch')
   execFileSync(process.execPath, bundleArgs, { cwd: ROOT, stdio: 'inherit' })
   validateBundle()
+}
+
+// The bundled Node runtime: kernels from 0.2.0 reject Electron's own runtime,
+// so a release without this cannot start the kernel on a machine that has no
+// system Node.js. A missing runtime is fetched here; an incomplete one is fatal.
+const NODE_RUNTIME = path.join(ROOT, 'node-runtime')
+if (!existsSync(path.join(NODE_RUNTIME, 'node.exe'))) {
+  console.log('node-runtime: not bundled yet — fetching the official Node.js runtime')
+  execFileSync(process.execPath, ['scripts/bundle-node.mjs'], { cwd: ROOT, stdio: 'inherit' })
+}
+if (!existsSync(path.join(NODE_RUNTIME, 'node.exe')) || !existsSync(path.join(NODE_RUNTIME, 'npm.cmd'))) {
+  throw new Error('bundled Node runtime is incomplete (node.exe / npm.cmd missing) — rebuild with npm run bundle:node')
+}
+try {
+  const manifest = JSON.parse(readFileSync(path.join(NODE_RUNTIME, 'manifest.json'), 'utf8'))
+  console.log(`node-runtime: ${manifest.node} (win32-x64, sha256 ${String(manifest.sha256).slice(0, 12)}…)`)
+} catch {
+  console.warn('node-runtime: manifest.json is missing or unreadable')
 }
 
 // Apply the local resilience patch to the generated JSONL persistence backend.

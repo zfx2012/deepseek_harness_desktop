@@ -11,7 +11,7 @@
     4. bundled smoke        (packaged exe --smoke-bundled: MUST use resources/harness,
                              and MUST paint the boot-progress page before ready)
     5. error-path smoke     (packaged exe --smoke-error: invalid harness path -> error card)
-    6. no-node smoke        (packaged exe with stripped PATH: ELECTRON_RUN_AS_NODE fallback)
+    6. no-node smoke        (packaged exe with stripped PATH: the BUNDLED Node runtime must boot the kernel)
     7. update-feed smoke    (packaged exe --smoke-update: discovers v0.2.0 from a local feed)
     8. kernel-update smoke  (packaged exe --smoke-kernel-update: real npm install + swap + reboot)
 
@@ -125,11 +125,14 @@ Invoke-Step 'error-path smoke' {
     -UserData $errHome
 }
 
-# 6. no-node smoke — stripped PATH forces the ELECTRON_RUN_AS_NODE fallback
+# 6. no-node smoke — a stripped PATH leaves no system Node, so the kernel must
+# boot on the BUNDLED Node runtime shipped in resources/node (kernels from 0.2.0
+# refuse Electron's own runtime, so this is the path that keeps "no Node needed")
 $noNodeHome = Join-Path $root '.verify-nonode-home'
-Invoke-Step 'no-node smoke (ELECTRON_RUN_AS_NODE)' {
+Invoke-Step 'no-node smoke (bundled Node runtime)' {
   Run-Smoke -Label 'nonode' -SmokeArgs @('--smoke-bundled', '--disable-gpu') `
-    -ConfigJson $config -UserData $noNodeHome -ExtraEnv @('Path=C:\Windows\System32;C:\Windows')
+    -ConfigJson $config -UserData $noNodeHome -ExtraEnv @('Path=C:\Windows\System32;C:\Windows') `
+    -Expect @('SMOKE_OK .*bootUi=checked')
 }
 
 # 7. update-feed smoke — the packaged app must discover version 0.2.0 from a

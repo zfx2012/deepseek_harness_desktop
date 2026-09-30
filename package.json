@@ -24,7 +24,8 @@
     "test": "node --test \"tests/**/*.test.js\"",
     "bundle:harness": "node scripts/bundle-harness.mjs",
     "dist": "node scripts/prepare-dist.mjs && electron-builder --win",
-    "dist:dir": "node scripts/prepare-dist.mjs && electron-builder --win dir"
+    "dist:dir": "node scripts/prepare-dist.mjs && electron-builder --win dir",
+    "bundle:node": "node scripts/bundle-node.mjs"
   },
   "devDependencies": {
     "electron": "^43.4.0",

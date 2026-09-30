@@ -21,6 +21,7 @@ const {
   satisfiesHarnessEngines,
   resolveNodeLaunch,
   prewarmNodeLaunch,
+  bundledNodeExe,
   resolveInstallRelative,
   resetNodeLaunchCache,
 } = require('../src/server.js')
@@ -100,13 +101,49 @@ test('resolveInstallRelative keeps relative defaults portable across install dir
 
 test('resolveNodeLaunch uses system node only when engines are satisfied', () => {
   resetNodeLaunchCache()
-  const launch = resolveNodeLaunch(() => ({ status: 0, stdout: 'v22.18.0\n' }))
-  assert.equal(launch.command, process.execPath) // too old -> fallback
+  const launch = resolveNodeLaunch(() => ({ status: 0, stdout: 'v22.18.0\n' }), { bundledNodeExe: null })
+  assert.equal(launch.command, process.execPath) // too old, nothing else available -> Electron
   assert.deepEqual(launch.args, ['--expose-internals'])
 
   resetNodeLaunchCache()
   const ok = resolveNodeLaunch(() => ({ status: 0, stdout: 'v24.18.1\n' }))
   assert.equal(ok.command, 'node')
+  resetNodeLaunchCache()
+})
+
+// ── bundled Node runtime (kernels >= 0.2.0 reject Electron's own runtime) ────
+
+test('bundledNodeExe resolves resources/node then the dev node-runtime dir', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-node-runtime-'))
+  const resources = path.join(tmp, 'resources')
+  const appRoot = path.join(tmp, 'app')
+  assert.equal(bundledNodeExe({ resourcesPath: resources, appRoot }), null, 'nothing bundled yet')
+
+  // Packaged layout wins when both exist.
+  fs.mkdirSync(path.join(resources, 'node'), { recursive: true })
+  fs.writeFileSync(path.join(resources, 'node', 'node.exe'), '')
+  fs.mkdirSync(path.join(appRoot, 'node-runtime'), { recursive: true })
+  fs.writeFileSync(path.join(appRoot, 'node-runtime', 'node.exe'), '')
+  assert.equal(bundledNodeExe({ resourcesPath: resources, appRoot }), path.join(resources, 'node', 'node.exe'))
+
+  // Dev layout alone is still usable.
+  assert.equal(bundledNodeExe({ resourcesPath: '', appRoot }), path.join(appRoot, 'node-runtime', 'node.exe'))
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('resolveNodeLaunch prefers the bundled Node runtime over the Electron fallback', () => {
+  resetNodeLaunchCache()
+  const bundled = 'C:\\app\\resources\\node\\node.exe'
+  const launch = resolveNodeLaunch(() => ({ status: 1, stdout: null }), { bundledNodeExe: bundled })
+  assert.equal(launch.command, bundled, 'no system node -> bundled runtime, never Electron')
+  assert.deepEqual(launch.args, [])
+  assert.deepEqual(launch.env, {})
+  resetNodeLaunchCache()
+
+  // An old system node must not win over the bundled runtime either.
+  resetNodeLaunchCache()
+  const old = resolveNodeLaunch(() => ({ status: 0, stdout: 'v20.11.0\n' }), { bundledNodeExe: bundled })
+  assert.equal(old.command, bundled)
   resetNodeLaunchCache()
 })
 
@@ -284,11 +321,15 @@ test('prewarmNodeLaunch caches a usable system node without blocking', async () 
   resetNodeLaunchCache()
 })
 
-test('prewarmNodeLaunch falls back to the Electron runtime for an old node', async () => {
+test('prewarmNodeLaunch defers an unusable system node to the bundled runtime', async () => {
   resetNodeLaunchCache()
   const launch = await prewarmNodeLaunch(() => fakeProbeChild('v20.11.0\n', 0))
-  assert.equal(launch.command, process.execPath)
-  assert.deepEqual(launch.args, ['--expose-internals'])
+  assert.equal(launch, null, 'the prewarm must not decide for an unusable system node')
+  // The synchronous resolver then picks the bundled Node runtime.
+  const resolved = resolveNodeLaunch(() => ({ status: 1, stdout: null }), {
+    bundledNodeExe: 'C:\\app\\resources\\node\\node.exe',
+  })
+  assert.equal(resolved.command, 'C:\\app\\resources\\node\\node.exe')
   resetNodeLaunchCache()
 })
 

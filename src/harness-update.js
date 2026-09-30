@@ -164,6 +164,29 @@ function pruneDevArtifacts(root) {
 }
 
 /**
+ * The npm command that ships inside the app (scripts/bundle-node.mjs installs
+ * the official Node distribution as resources/node), or null when absent. The
+ * bundled npm.cmd resolves node.exe from its own directory, so it works with
+ * no Node.js on PATH and no PATH lookup at all.
+ * @param {object} [deps] - { resourcesPath?, appRoot? } for tests.
+ */
+function bundledNpmCommand(deps = {}) {
+  const resourcesPath = deps.resourcesPath !== undefined ? deps.resourcesPath : process.resourcesPath
+  const appRoot = deps.appRoot !== undefined ? deps.appRoot : path.join(__dirname, '..')
+  const candidates = []
+  if (resourcesPath) candidates.push(path.join(resourcesPath, 'node', 'npm.cmd'))
+  candidates.push(path.join(appRoot, 'node-runtime', 'npm.cmd'))
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      /* unreadable: try the next location */
+    }
+  }
+  return null
+}
+
+/**
  * Install a published dsh version into a deploy-layout harness root:
  *
  *   1. `npm install @deepseek-ai/dsh@<version>` into a temp stage
@@ -186,7 +209,7 @@ function pruneDevArtifacts(root) {
  * @returns {Promise<{ ok: true, version: string, packageCount: number }>}
  * @throws when npm fails or the result is not a valid harness.
  */
-async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl, log = () => {}, fresh = false } = {}) {
+async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl, log = () => {}, fresh = false, bundledNpm } = {}) {
   const ver = String(version ?? '').trim()
   // Anchored semver-ish: x.y.z with an optional -prerelease suffix. Anything
   // else must never reach `npm install <pkg>@<ver>`.
@@ -199,7 +222,7 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
     }
   }
   const run = spawnImpl ?? spawnSync
-  const npmCmd = npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
+  let npmCmd = npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
   // Some restricted environments refuse to spawn .cmd shims directly
   // (EINVAL/ENOENT); retry through cmd.exe /c only for those spawn-level
   // failures. Other failures (timeouts, non-zero exits) must surface as-is —
@@ -219,12 +242,22 @@ async function installHarnessUpdate(version, targetRoot, { npmCommand, spawnImpl
   try {
     // Preflight: the update shells out to npm, so a machine without Node.js
     // would otherwise fail deep inside the install with an opaque spawn error.
-    const probe = runNpm(['--version'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+    // The bundled runtime is the fallback, so "no system Node" still updates.
+    let probe = runNpm(['--version'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+    if ((!probe || probe.status !== 0) && npmCommand === undefined) {
+      const bundled = bundledNpm !== undefined ? bundledNpm : bundledNpmCommand()
+      if (bundled !== null && bundled !== npmCmd) {
+        log('未检测到系统 npm，改用应用内置的 Node/npm 运行时。')
+        npmCmd = bundled
+        probe = runNpm(['--version'], { encoding: 'utf8', windowsHide: true, timeout: 30000 })
+      }
+    }
     if (!probe || probe.status !== 0) {
       const detail = probe && probe.error ? `（${probe.error.code || probe.error.message}）` : ''
       throw new Error(
-        `未检测到可用的 npm${detail}。更新内核需要系统安装 Node.js（含 npm）；`
-        + '也可以改用桌面端新版安装包来更新内置内核。',
+        `未检测到可用的 npm${detail}。更新内核需要系统安装 Node.js（含 npm），`
+        + '或使用带内置 Node 运行时的桌面端安装包；'
+        + '也可以直接安装新版桌面端来更新内置内核。',
       )
     }
     // Anchor npm to the stage: without a package.json npm walks up to the
@@ -368,6 +401,7 @@ module.exports = {
   fetchOfficialHarnessVersion,
   installHarnessUpdate,
   pruneDevArtifacts,
+  bundledNpmCommand,
   OFFICIAL_REPO_URL,
   NPM_REGISTRY_URL,
 }

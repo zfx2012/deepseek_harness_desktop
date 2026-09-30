@@ -9,3 +9,7 @@ harness-deploy/
 release/
 *.log
 .npm-cache/
+
+# Bundled official Node.js runtime (scripts/bundle-node.mjs)
+node-runtime/
+.cache/node/
