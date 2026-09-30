@@ -337,6 +337,25 @@ test('a ready server logs how long the boot took', async () => {
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
+// ── unsupported Electron runtime (kernel >= 0.2.0 native addon) ──────────────
+
+test('an unsupported Electron fingerprint reports an actionable error', () => {
+  const { manager, spawned, tmp } = makeManager()
+  manager.start()
+  const child = spawned[0].child
+
+  // The kernel writes this to the log, then exits — mimic both steps.
+  fs.appendFileSync(manager.logFile, 'dsh: fatal uncaught exception: Error: dsh: host preparation failed: node-addon-require-builtin unsupported: Unsupported/no-context (unsupported Electron runtime fingerprint: Node 24.18.1, V8 15.0.245.28-electron.0 (supported Electron versions: 43.0.0, 44.0.0, 45.0.0-alpha.6))\n')
+  manager.drainLog()
+  child.emit('exit', 1, null)
+
+  assert.equal(manager.phase, 'error')
+  assert.match(manager.error, /Electron 运行时/)
+  assert.match(manager.error, /Node\.js/)
+  manager.dispose()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
 // ── log rotation ─────────────────────────────────────────────────────────────
 
 test('rotateLog keeps two generations when the log outgrows the cap', () => {

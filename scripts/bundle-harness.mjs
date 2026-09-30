@@ -84,11 +84,15 @@ async function bootSmoke() {
       const poll = setInterval(() => {
         try {
           const content = readFileSync(logFile, 'utf8')
-          const line = content.split('\n').filter((l) => l.includes('dsh web:')).pop()
-          if (line) {
+          // Require the readiness URL, not just the "dsh web:" prefix: newer
+          // kernels also print "dsh web: opening the default browser; pass
+          // --no-open to disable" BEFORE the listener is up, which would make
+          // this smoke pass without the server ever becoming ready.
+          const match = content.match(/dsh web: (https?:\/\/\S+)/)
+          if (match) {
             clearTimeout(timer)
             clearInterval(poll)
-            resolve(line.trim())
+            resolve(match[0].trim())
           }
         } catch { /* not yet */ }
       }, 250)

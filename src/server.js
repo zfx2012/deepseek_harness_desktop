@@ -438,6 +438,20 @@ class ServerManager {
       this.stopPolling()
       if (this.stopping) return
       if (this.expectExit) return // replaced by a fresh start()
+      // Kernels from 0.2.0 on load a native addon that probes internal module
+      // loaders and accepts only an exact table of Electron builds. When the
+      // app had to launch the kernel with its own Electron runtime (no usable
+      // system Node) and that build is not in the table, the child dies at boot
+      // with "unsupported Electron runtime fingerprint". That is a
+      // configuration problem with a concrete remedy — never a bare exit code.
+      if (/unsupported Electron runtime fingerprint/.test(this.logTail.join('\n'))) {
+        this.error =
+          '内置内核不支持的 Electron 运行时：当前机器没有可用的系统 Node.js，'
+          + '而该内核要求 Node.js 22.19+ / 24+，或要求本应用自带的 Electron 恰为其支持的内核版本。'
+          + '请安装 Node.js 后重启本应用，或在设置中把 harness 路径指向受支持的内核。'
+        this.setState({ phase: 'error' })
+        return
+      }
       // Known upstream bug (atomic-write): a stale writer lock survives a crash
       // and makes the next boot time out. Recover once by clearing it and
       // restarting; a lock whose holder is still alive is left untouched.
