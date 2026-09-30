@@ -114,27 +114,39 @@ function mergeDir(src, dst, exclude = new Set()) {
 }
 
 /**
- * File kinds that no runtime path reads: TypeScript declaration files and
- * source maps. A published closure carries ~11.5k of them out of ~25.4k files
- * (69 MB of 562 MB), and they dominate the *installer* cost: extraction and
- * file creation are per-file bound (measured: extracting the payload and
- * plain-copying the same tree take the same time), so dropping them cuts the
- * install's file work by ~45% and shrinks the compressed payload as well.
+ * File kinds that no runtime path reads:
  *
- * Safety: no runtime module under the closure references `.d.ts` (verified by
- * scanning every .js/.mjs/.cjs for the literal), and `.map` files are only
- * named by `sourceMappingURL` comments, which Node reads only when started
- * with --enable-source-maps (the desktop never passes it). `.ts`/`.mts`
- * sources are deliberately KEPT — some packages load them at runtime.
+ *  - `.d.ts` / `.map`: TypeScript declarations and source maps. A published
+ *    closure carries thousands of them, and they dominate the *installer* cost
+ *    (extraction is per-file bound: measured, extracting the payload and
+ *    plain-copying the same tree take the same time).
+ *  - `.pdb`: Windows debug symbols shipped inside node-pty's prebuilds (~20 MB).
+ *
+ * Safety: no runtime module under the closure references `.d.ts` or `.pdb`
+ * (verified by scanning every .js/.mjs/.cjs for the literal), `.map` files are
+ * only named by `sourceMappingURL` comments, which Node reads only when started
+ * with --enable-source-maps (the desktop never passes it), and `.pdb` files are
+ * debugger-only artifacts. `.ts`/`.mts` sources are deliberately KEPT — some
+ * packages load them at runtime.
  */
-const DEV_ARTIFACT_SUFFIXES = ['.d.ts', '.map']
+const DEV_ARTIFACT_SUFFIXES = ['.d.ts', '.map', '.pdb']
 
 /**
- * Delete dev-only artifacts under a harness root, in place.
+ * Directory fragments that only another platform/architecture would load. The
+ * shipped installers are win32-x64 ("--win --x64"), so an arm64 prebuild can
+ * never be selected: node-pty and friends resolve `prebuilds/<platform>-<arch>`
+ * from `process.arch`.
+ */
+const FOREIGN_ARCH_DIRS = ['win32-arm64', 'win10-arm64']
+
+/**
+ * Delete dev-only and foreign-architecture files under a harness root, in place.
  * @param {string} root - harness root.
+ * @param {object} [deps] - { pruneForeignArch?: boolean } (default true; the
+ *   release builds x64 only).
  * @returns {number} number of files removed.
  */
-function pruneDevArtifacts(root) {
+function pruneDevArtifacts(root, { pruneForeignArch = true } = {}) {
   const stack = [root]
   let removed = 0
   while (stack.length > 0) {
@@ -148,6 +160,16 @@ function pruneDevArtifacts(root) {
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
+        if (pruneForeignArch && FOREIGN_ARCH_DIRS.includes(entry.name)) {
+          // Count the files so the caller's log line reflects the real saving.
+          removed += countFiles(full)
+          try {
+            fs.rmSync(full, { recursive: true, force: true })
+          } catch {
+            /* locked: leave it */
+          }
+          continue
+        }
         stack.push(full)
         continue
       }
@@ -161,6 +183,26 @@ function pruneDevArtifacts(root) {
     }
   }
   return removed
+}
+
+/** Number of files under a directory (best effort, for progress reporting). */
+function countFiles(dir) {
+  let count = 0
+  const stack = [dir]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    let entries
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) stack.push(path.join(current, entry.name))
+      else count += 1
+    }
+  }
+  return count
 }
 
 /**

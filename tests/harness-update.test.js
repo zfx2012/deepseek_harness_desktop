@@ -302,6 +302,41 @@ test('pruneDevArtifacts tolerates a missing root', () => {
   assert.equal(pruneDevArtifacts(path.join(os.tmpdir(), 'dsh-prune-does-not-exist-xyz')), 0)
 })
 
+test('pruneDevArtifacts drops debug symbols and foreign-architecture prebuilds', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-prune-arch-'))
+  const files = [
+    'node_modules/node-pty/prebuilds/win32-x64/pty.node',
+    'node_modules/node-pty/prebuilds/win32-x64/conpty.pdb',
+    'node_modules/node-pty/prebuilds/win32-arm64/pty.node',
+    'node_modules/node-pty/prebuilds/win32-arm64/conpty.pdb',
+    'node_modules/node-pty/third_party/conpty/1.25/win10-arm64/OpenConsole.exe',
+    'node_modules/node-pty/prebuilds/darwin-arm64/pty.node', // kept: OS, not arch
+  ]
+  for (const rel of files) {
+    const full = path.join(tmp, rel)
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    fs.writeFileSync(full, 'x')
+  }
+
+  const removed = pruneDevArtifacts(tmp)
+  assert.equal(removed, 4, 'two arm64 files, one arm64 .pdb and the x64 .pdb')
+  assert.equal(fs.existsSync(path.join(tmp, 'node_modules/node-pty/prebuilds/win32-x64/pty.node')), true)
+  assert.equal(fs.existsSync(path.join(tmp, 'node_modules/node-pty/prebuilds/win32-x64/conpty.pdb')), false)
+  assert.equal(fs.existsSync(path.join(tmp, 'node_modules/node-pty/prebuilds/win32-arm64')), false)
+  assert.equal(fs.existsSync(path.join(tmp, 'node_modules/node-pty/third_party/conpty/1.25/win10-arm64')), false)
+  assert.equal(fs.existsSync(path.join(tmp, 'node_modules/node-pty/prebuilds/darwin-arm64/pty.node')), true)
+
+  // Opt-out keeps another architecture's files (used by tests/tools).
+  const keep = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-prune-arch-keep-'))
+  fs.mkdirSync(path.join(keep, 'win32-arm64'), { recursive: true })
+  fs.writeFileSync(path.join(keep, 'win32-arm64/pty.node'), 'x')
+  assert.equal(pruneDevArtifacts(keep, { pruneForeignArch: false }), 0)
+  assert.equal(fs.existsSync(path.join(keep, 'win32-arm64/pty.node')), true)
+
+  fs.rmSync(tmp, { recursive: true, force: true })
+  fs.rmSync(keep, { recursive: true, force: true })
+})
+
 // ── bundled npm fallback (machines without a system Node.js) ─────────────────
 
 test('bundledNpmCommand resolves resources/node then the dev node-runtime dir', () => {

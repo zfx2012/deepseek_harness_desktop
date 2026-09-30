@@ -14,6 +14,12 @@ files:
 # node_modules directory, which would strip the harness dependency tree.
 afterPack: scripts/after-pack.cjs
 asar: true
+# Ship only the locales the UI can actually show (Simplified Chinese + English):
+# Electron's locales/ directory is ~47 MB of .pak files for ~50 languages, of
+# which the app uses two. Electron falls back to en-US for anything else.
+electronLanguages:
+  - en-US
+  - zh-CN
 # The kernel-update runner and its modules MUST be outside the asar archive:
 # the update runs them in a child process, and neither system Node nor
 # Electron's ELECTRON_RUN_AS_NODE mode can read inside an asar.
